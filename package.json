@@ -1,0 +1,17 @@
+{
+  "name": "ltd-sandy-shores",
+  "version": "5.0.0",
+  "private": true,
+  "description": "LTD Sandy Shores - multi-PC RP, autosave Supabase, Discord webhook",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js"
+  },
+  "engines": {
+    "node": ">=20 <25"
+  },
+  "dependencies": {
+    "express": "5.1.0"
+  }
+}

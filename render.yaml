@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: ltd-sandy-shores
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: DISCORD_WEBHOOK
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: SUPABASE_TABLE
+        value: ltd_state
