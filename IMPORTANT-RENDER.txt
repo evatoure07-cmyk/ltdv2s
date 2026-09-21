@@ -1,0 +1,13 @@
+LTD Sandy Shores V5.1 — CORRECTION SUPABASE
+
+Dans Render > Environment :
+
+SUPABASE_URL=https://TON-PROJET.supabase.co
+SUPABASE_SECRET_KEY=sb_secret_...
+DISCORD_WEBHOOK=https://discord.com/api/webhooks/...
+
+IMPORTANT :
+- SUPABASE_URL doit être l'URL RACINE du projet, sans /rest/v1.
+- Cette version retire automatiquement /rest/v1 si tu le mets par erreur.
+- La table Supabase doit s'appeler ltd_state.
+- La ligne utilisée est id = 1.

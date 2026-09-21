@@ -1,0 +1,60 @@
+LTD SANDY SHORES V5 — INSTALLATION EN 3 ÉTAPES
+================================================
+
+Cette version est faite pour plusieurs PC / tablettes en RP.
+Une fois installée, tu n'as plus à gérer la base au quotidien.
+
+ÉTAPE 1 — SUPABASE (une seule fois)
+-----------------------------------
+1. Crée un projet sur Supabase.
+2. Ouvre SQL Editor > New query.
+3. Ouvre le fichier SUPABASE-SETUP.sql de ce ZIP.
+4. Copie tout le contenu, colle-le dans Supabase, puis clique Run.
+
+ÉTAPE 2 — RÉCUPÉRER 2 INFOS SUPABASE
+-------------------------------------
+Dans Supabase :
+- Project URL : depuis Connect (ex: https://xxxxx.supabase.co)
+- Secret key : Settings > API Keys > Secret key (sb_secret_...)
+
+IMPORTANT : ne partage jamais la Secret key et ne la mets jamais sur GitHub.
+Elle doit uniquement être collée dans Render > Environment.
+
+ÉTAPE 3 — RENDER
+----------------
+Dans ton service Render actuel > Environment, garde seulement :
+
+SUPABASE_URL = ton Project URL
+SUPABASE_SECRET_KEY = ta Secret key
+DISCORD_WEBHOOK = ton webhook Discord
+
+Tu peux supprimer les anciennes variables JSONSTORAGE_*.
+Puis clique Save, rebuild, and deploy.
+
+C'EST TOUT.
+===========
+Après le déploiement :
+- ne change PAS l'URL Render / le service pour la première migration ;
+- ouvre le site avec le navigateur où tes entreprises existent déjà ;
+- les entreprises + mots de passe existants sont récupérés du cache local ;
+- la migration vers Supabase se fait automatiquement ;
+- les changements admin sont autosauvegardés après ~1,4 seconde ;
+- les commandes sont sauvegardées immédiatement ;
+- les autres PC/tablettes se resynchronisent automatiquement ;
+- le bouton 💾 Sauvegarder reste disponible si tu veux forcer une sauvegarde.
+
+VÉRIFICATION
+============
+Dans l'administration, clique « ☁ État ».
+Tu dois voir :
+- Discord configuré ✅
+- Supabase configuré ✅
+- Connexion Supabase OK ✅
+- Données initialisées ✅ après la première sauvegarde/migration
+
+SÉCURITÉ
+========
+- Le navigateur ne reçoit jamais la Secret key Supabase.
+- La clé reste uniquement sur le serveur Render.
+- Une copie locale existe en secours sur chaque appareil.
+- Administration > Infos entreprises permet d'exporter/importer un backup JSON.

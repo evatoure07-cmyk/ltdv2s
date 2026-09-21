@@ -7,10 +7,13 @@ const PORT = process.env.PORT || 3000;
 
 // Secrets: keep these on Render, never in GitHub/browser code.
 const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK || process.env.DISCORD_WEBHOOK_URL || process.env.WEBHOOK_URL || '';
-const SUPABASE_URL = String(process.env.SUPABASE_URL || '').replace(/\/+$/, '');
+const SUPABASE_URL = String(process.env.SUPABASE_URL || '')
+  .trim()
+  .replace(/\/rest\/v1\/?$/i, '')
+  .replace(/\/+$/, '');
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const SUPABASE_TABLE = process.env.SUPABASE_TABLE || 'ltd_state';
-const STATE_ID = 'main';
+const STATE_ID = 1;
 
 const CACHE_FILE = path.join(__dirname, 'data-cache.json');
 let memoryCache = null;
