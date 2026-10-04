@@ -405,9 +405,16 @@ if (DISCORD_BOT_TOKEN) {
       const updated = await updateOrderFromDiscord(order.id, status, user.tag || user.username || 'Discord');
       await syncDiscordThreadStatus(updated, status);
       await reaction.users.remove(user.id).catch(() => {});
-      await reaction.message.channel.send(
-        `${discordStatusMeta(status).emoji} **Statut mis à jour : ${discordStatusMeta(status).label}**`
-      ).catch(() => {});
+      if (updated?.discord?.threadId) {
+        try {
+          const thread = await discordClient.channels.fetch(updated.discord.threadId);
+          if (thread?.send) {
+            await thread.send(`${discordStatusMeta(status).emoji} **${discordStatusMeta(status).label}**`);
+          }
+        } catch (e) {
+          console.error('Discord thread confirmation failed:', e.message);
+        }
+      }
     } catch (e) {
       console.error('Discord reaction status error:', e.message);
     }
