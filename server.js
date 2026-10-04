@@ -285,38 +285,89 @@ async function syncDiscordThreadStatus(order, status) {
 }
 async function setupDiscordThread(order, webhookMessage) {
   if (!(await waitForDiscordReady())) return { ok: false, error: 'Bot Discord non configuré ou non prêt' };
+
+  let channel;
+  let starter;
+
   try {
-    const channel = await discordClient.channels.fetch(webhookMessage.channel_id);
+    channel = await discordClient.channels.fetch(webhookMessage.channel_id);
     if (!channel?.messages) throw new Error('Salon Discord introuvable ou non textuel');
-    const starter = await channel.messages.fetch(webhookMessage.id);
+  } catch (e) {
+    console.error('Discord channel access failed:', e.message);
+    return {
+      ok: false,
+      phase: 'channel_access',
+      error: e.message,
+      messageId: webhookMessage.id,
+      channelId: webhookMessage.channel_id
+    };
+  }
+
+  try {
+    starter = await channel.messages.fetch(webhookMessage.id);
+  } catch (e) {
+    console.error('Discord message access failed:', e.message);
+    return {
+      ok: false,
+      phase: 'message_access',
+      error: e.message,
+      messageId: webhookMessage.id,
+      channelId: webhookMessage.channel_id
+    };
+  }
+
+  // Fallback principal : les réactions du message de commande fonctionnent même si Discord refuse la création du fil.
+  let reactionsAdded = true;
+  for (const emoji of ['🔴','🟠','🟡','🟢','💵']) {
+    const ok = await starter.react(emoji).then(() => true).catch(e => {
+      console.error('Discord reaction add failed:', emoji, e.message);
+      return false;
+    });
+    if (!ok) reactionsAdded = false;
+  }
+
+  try {
     const thread = await starter.startThread({
       name: safeThreadName(order, order.status || 'awaiting_payment'),
       autoArchiveDuration: 1440,
       reason: `Commande ${order.id}`
     });
+
     const control = await thread.send({
       content:
         `**Pilotage de la commande ${order.id}**\n` +
-        `Réagis avec le statut voulu :\n` +
+        `Réagis ici ou directement sur le message principal :\n` +
         `🔴 = Refusé\n` +
         `🟠 = Manque des choses\n` +
         `🟡 = Commande prête dans son coffre\n` +
         `🟢 = Livré\n` +
         `💵 = En attente de paiement`
     });
+
     for (const emoji of ['🔴','🟠','🟡','🟢','💵']) {
       await control.react(emoji).catch(() => {});
     }
+
     return {
       ok: true,
       messageId: webhookMessage.id,
       channelId: webhookMessage.channel_id,
       threadId: thread.id,
-      controlMessageId: control.id
+      controlMessageId: control.id,
+      reactionsOnMainMessage: reactionsAdded
     };
   } catch (e) {
-    console.error('Discord thread setup failed:', e.message);
-    return { ok: false, error: e.message };
+    console.error('Discord thread create failed:', e.message);
+    return {
+      ok: false,
+      phase: 'thread_create',
+      error: e.message,
+      messageId: webhookMessage.id,
+      channelId: webhookMessage.channel_id,
+      controlMessageId: webhookMessage.id,
+      reactionsOnMainMessage: reactionsAdded,
+      fallback: 'main_message_reactions'
+    };
   }
 }
 
@@ -346,7 +397,8 @@ if (DISCORD_BOT_TOKEN) {
       const { data } = await getDataSafe();
       const current = normalizeData(data);
       const order = current.orders.find(o =>
-        o?.discord?.controlMessageId === reaction.message.id
+        o?.discord?.controlMessageId === reaction.message.id ||
+        o?.discord?.messageId === reaction.message.id
       );
       if (!order) return;
 
@@ -412,9 +464,10 @@ async function sendDiscord(order) {
     return { ok: true, status: r.status, thread: { ok: false, error: 'Réponse Discord sans identifiants de message' } };
   }
   const thread = await setupDiscordThread(order, webhookMessage);
-  const discord = thread.ok ? thread : {
+  const discord = {
     messageId: webhookMessage.id,
-    channelId: webhookMessage.channel_id
+    channelId: webhookMessage.channel_id,
+    ...(thread || {})
   };
   return { ok: true, status: r.status, thread, discord };
 }
