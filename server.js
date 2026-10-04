@@ -1,12 +1,14 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const { Client, GatewayIntentBits, Partials } = require('discord.js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Secrets: keep these on Render, never in GitHub/browser code.
 const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK || process.env.DISCORD_WEBHOOK_URL || process.env.WEBHOOK_URL || '';
+const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || '';
 const SUPABASE_URL = String(process.env.SUPABASE_URL || '')
   .trim()
   .replace(/\/rest\/v1\/?$/i, '')
@@ -177,16 +179,174 @@ async function persistData(input) {
   }
 }
 
+
+const DISCORD_STATUS = {
+  awaiting_payment: { emoji: '💵', label: 'En attente de paiement', color: 0xC9A84C },
+  missing: { emoji: '🟠', label: 'Manque des choses', color: 0xD97706 },
+  ready: { emoji: '🟡', label: 'Commande prête dans son coffre', color: 0xEAB308 },
+  done: { emoji: '🟢', label: 'Livré', color: 0x16A34A },
+  refused: { emoji: '🔴', label: 'Refusé', color: 0xDC2626 },
+  pending: { emoji: '💵', label: 'En attente de paiement', color: 0xC9A84C },
+  validated: { emoji: '🟠', label: 'Manque des choses', color: 0xD97706 },
+  cancel: { emoji: '🔴', label: 'Refusé', color: 0xDC2626 }
+};
+const REACTION_TO_STATUS = new Map([
+  ['💵','awaiting_payment'],
+  ['🟠','missing'],
+  ['🟡','ready'],
+  ['🟢','done'],
+  ['🔴','refused']
+]);
+
+let discordClient = null;
+let discordReadyResolve = null;
+const discordReadyPromise = new Promise(resolve => { discordReadyResolve = resolve; });
+
+function discordStatusMeta(status) {
+  return DISCORD_STATUS[status] || DISCORD_STATUS.awaiting_payment;
+}
+function safeThreadName(order, status) {
+  const meta = discordStatusMeta(status);
+  const company = String(order.company || 'Entreprise').replace(/\s+/g, ' ').trim();
+  return `${meta.emoji} ${order.id} · ${company} · ${meta.label}`.slice(0, 100);
+}
+async function waitForDiscordReady(timeoutMs = 8000) {
+  if (!DISCORD_BOT_TOKEN) return false;
+  if (discordClient?.isReady()) return true;
+  return await Promise.race([
+    discordReadyPromise.then(() => true),
+    new Promise(resolve => setTimeout(() => resolve(false), timeoutMs))
+  ]);
+}
+async function updateOrderFromDiscord(orderId, status, userTag = 'Discord') {
+  const { data } = await getDataSafe();
+  const current = normalizeData(data);
+  const idx = current.orders.findIndex(o => o.id === orderId);
+  if (idx < 0) throw new Error('Commande introuvable');
+  const order = current.orders[idx];
+  order.status = status;
+  order.statusHistory = order.statusHistory || [];
+  order.statusHistory.push({
+    status,
+    date: new Date().toLocaleDateString('fr-FR'),
+    time: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+    source: 'discord',
+    by: userTag
+  });
+  current.updatedAt = Date.now();
+  current.revision = Number(current.revision || 0) + 1;
+  const saved = await persistData(current);
+  if (!saved.ok) throw new Error(saved.error || 'Sauvegarde Supabase impossible');
+  return order;
+}
+async function syncDiscordThreadStatus(order, status) {
+  if (!order?.discord?.threadId || !(await waitForDiscordReady())) return false;
+  try {
+    const thread = await discordClient.channels.fetch(order.discord.threadId);
+    if (thread?.setName) await thread.setName(safeThreadName(order, status), `Statut ${order.id}: ${discordStatusMeta(status).label}`);
+    return true;
+  } catch (e) {
+    console.error('Discord thread rename failed:', e.message);
+    return false;
+  }
+}
+async function setupDiscordThread(order, webhookMessage) {
+  if (!(await waitForDiscordReady())) return { ok: false, error: 'Bot Discord non configuré ou non prêt' };
+  try {
+    const channel = await discordClient.channels.fetch(webhookMessage.channel_id);
+    if (!channel?.messages) throw new Error('Salon Discord introuvable ou non textuel');
+    const starter = await channel.messages.fetch(webhookMessage.id);
+    const thread = await starter.startThread({
+      name: safeThreadName(order, order.status || 'awaiting_payment'),
+      autoArchiveDuration: 1440,
+      reason: `Commande ${order.id}`
+    });
+    const control = await thread.send({
+      content:
+        `**Pilotage de la commande ${order.id}**\n` +
+        `Réagis avec le statut voulu :\n` +
+        `🔴 = Refusé\n` +
+        `🟠 = Manque des choses\n` +
+        `🟡 = Commande prête dans son coffre\n` +
+        `🟢 = Livré\n` +
+        `💵 = En attente de paiement`
+    });
+    for (const emoji of ['🔴','🟠','🟡','🟢','💵']) {
+      await control.react(emoji).catch(() => {});
+    }
+    return {
+      ok: true,
+      messageId: webhookMessage.id,
+      channelId: webhookMessage.channel_id,
+      threadId: thread.id,
+      controlMessageId: control.id
+    };
+  } catch (e) {
+    console.error('Discord thread setup failed:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+if (DISCORD_BOT_TOKEN) {
+  discordClient = new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.GuildMessageReactions
+    ],
+    partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User]
+  });
+
+  discordClient.once('ready', () => {
+    console.log('Discord bot connected as', discordClient.user?.tag);
+    discordReadyResolve?.();
+  });
+
+  discordClient.on('messageReactionAdd', async (reaction, user) => {
+    try {
+      if (user?.bot) return;
+      if (reaction.partial) await reaction.fetch();
+      if (reaction.message?.partial) await reaction.message.fetch();
+      const status = REACTION_TO_STATUS.get(reaction.emoji?.name);
+      if (!status) return;
+
+      const { data } = await getDataSafe();
+      const current = normalizeData(data);
+      const order = current.orders.find(o =>
+        o?.discord?.controlMessageId === reaction.message.id
+      );
+      if (!order) return;
+
+      const updated = await updateOrderFromDiscord(order.id, status, user.tag || user.username || 'Discord');
+      await syncDiscordThreadStatus(updated, status);
+      await reaction.users.remove(user.id).catch(() => {});
+      await reaction.message.channel.send(
+        `${discordStatusMeta(status).emoji} **Statut mis à jour : ${discordStatusMeta(status).label}**`
+      ).catch(() => {});
+    } catch (e) {
+      console.error('Discord reaction status error:', e.message);
+    }
+  });
+
+  discordClient.login(DISCORD_BOT_TOKEN).catch(e => {
+    console.error('Discord bot login failed:', e.message);
+    discordReadyResolve?.();
+  });
+} else {
+  discordReadyResolve?.();
+}
+
 async function sendDiscord(order) {
   if (!DISCORD_WEBHOOK) return { ok: false, error: 'DISCORD_WEBHOOK non configuré' };
   const prodLines = (order.products || [])
     .map(p => `> **${p.name}** — ${p.qty} × $${p.price} = **$${p.qty * p.price}**`)
     .join('\n').slice(0, 1000) || '—';
+  const meta = discordStatusMeta(order.status || 'awaiting_payment');
   const embed = {
     username: 'Maritza · LTD Sandy Shores',
     embeds: [{
-      title: '🛒 Nouvelle commande — ' + order.id,
-      color: 0x5C3A21,
+      title: `${meta.emoji} Nouvelle commande — ${order.id}`,
+      color: meta.color,
       fields: [
         { name: '🏢 Entreprise', value: String(order.company || '—').slice(0, 1024), inline: true },
         { name: '📞 Téléphone', value: String(order.tel || '—').slice(0, 1024), inline: true },
@@ -197,7 +357,8 @@ async function sendDiscord(order) {
         { name: '💰 Total', value: '**$' + Number(order.total || 0).toLocaleString('fr-FR') + '**', inline: true },
         { name: '📍 Adresse', value: String(order.adresse || '—').slice(0, 1024), inline: false },
         { name: '📅 Date', value: String(order.date || '—'), inline: true },
-        { name: '🕐 Horaire', value: String(order.horaire || '—'), inline: true }
+        { name: '🕐 Horaire', value: String(order.horaire || '—'), inline: true },
+        { name: '📌 Statut', value: `${meta.emoji} **${meta.label}**`, inline: false }
       ],
       footer: { text: 'LTD Sandy Shores · Commandes' },
       timestamp: new Date().toISOString()
@@ -211,7 +372,18 @@ async function sendDiscord(order) {
   });
   const body = await r.text();
   if (!r.ok) return { ok: false, error: `Discord ${r.status}: ${body.slice(0, 300)}` };
-  return { ok: true, status: r.status };
+
+  let webhookMessage = null;
+  try { webhookMessage = JSON.parse(body); } catch {}
+  if (!webhookMessage?.id || !webhookMessage?.channel_id) {
+    return { ok: true, status: r.status, thread: { ok: false, error: 'Réponse Discord sans identifiants de message' } };
+  }
+  const thread = await setupDiscordThread(order, webhookMessage);
+  const discord = thread.ok ? thread : {
+    messageId: webhookMessage.id,
+    channelId: webhookMessage.channel_id
+  };
+  return { ok: true, status: r.status, thread, discord };
 }
 
 app.get('/api/data', async (req, res) => {
@@ -262,17 +434,31 @@ app.post('/api/orders', async (req, res) => {
     if (!order || !order.id || !order.company || !Array.isArray(order.products)) {
       return res.status(400).json({ ok: false, error: 'Commande invalide' });
     }
+    if (!order.status || order.status === 'pending') order.status = 'awaiting_payment';
+    order.statusHistory = Array.isArray(order.statusHistory) ? order.statusHistory : [];
+    if (!order.statusHistory.length || order.statusHistory[order.statusHistory.length - 1]?.status !== order.status) {
+      order.statusHistory.push({
+        status: order.status,
+        date: new Date().toLocaleDateString('fr-FR'),
+        time: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+        source: 'order'
+      });
+    }
+
     const { data } = await getDataSafe();
     const current = normalizeData(data);
-    if (!current.orders.some(o => o.id === order.id)) current.orders.push(order);
+    const existing = current.orders.findIndex(o => o.id === order.id);
+    if (existing < 0) current.orders.push(order);
+    else current.orders[existing] = { ...current.orders[existing], ...order };
+
+    const discord = await sendDiscord(order).catch(e => ({ ok: false, error: e.message }));
+    const idx = current.orders.findIndex(o => o.id === order.id);
+    if (idx >= 0 && discord?.discord) current.orders[idx].discord = discord.discord;
+
     current.updatedAt = Date.now();
     current.revision = Number(current.revision || 0) + 1;
     writeCache(current);
-
-    const [storage, discord] = await Promise.all([
-      persistData(current),
-      sendDiscord(order).catch(e => ({ ok: false, error: e.message }))
-    ]);
+    const storage = await persistData(current);
 
     res.status(discord.ok ? 200 : 207).json({
       ok: true,
@@ -300,7 +486,8 @@ app.post('/api/notify', async (req, res) => {
 app.post('/api/discord/status', async (req, res) => {
   try {
     const { orderId, status } = req.body || {};
-    if (!orderId || !['pending', 'validated', 'ready', 'done', 'cancel'].includes(status)) {
+    const allowed = ['pending','awaiting_payment','missing','validated','ready','done','refused','cancel'];
+    if (!orderId || !allowed.includes(status)) {
       return res.status(400).json({ ok: false, error: 'Statut invalide' });
     }
     const { data } = await getDataSafe();
@@ -318,7 +505,8 @@ app.post('/api/discord/status', async (req, res) => {
     current.updatedAt = Date.now();
     current.revision = Number(current.revision || 0) + 1;
     const saved = await persistData(current);
-    res.status(saved.ok ? 200 : 503).json({ ok: saved.ok, remoteSaved: saved.ok, error: saved.error || '' });
+    const threadUpdated = await syncDiscordThreadStatus(current.orders[idx], status);
+    res.status(saved.ok ? 200 : 503).json({ ok: saved.ok, remoteSaved: saved.ok, threadUpdated, error: saved.error || '' });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
@@ -355,6 +543,8 @@ app.get('/api/diagnostics', async (req, res) => {
   res.json({
     ok: true,
     discordConfigured: Boolean(DISCORD_WEBHOOK),
+    discordBotConfigured: Boolean(DISCORD_BOT_TOKEN),
+    discordBotReady: Boolean(discordClient?.isReady()),
     storage: { ...cfg, remoteRead, remoteInitialized, remoteError, remoteUpdatedAt },
     cache: {
       updatedAt: cache.updatedAt || 0,
@@ -376,7 +566,9 @@ app.get('/health', (req, res) => res.status(200).json({
   ok: true,
   storage: 'supabase',
   storageConfigured: storageConfig().configured,
-  discordConfigured: Boolean(DISCORD_WEBHOOK)
+  discordConfigured: Boolean(DISCORD_WEBHOOK),
+  discordBotConfigured: Boolean(DISCORD_BOT_TOKEN),
+  discordBotReady: Boolean(discordClient?.isReady())
 }));
 
 app.use((req, res, next) => {
