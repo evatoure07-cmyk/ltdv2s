@@ -239,8 +239,8 @@ function discordStatusMeta(status) {
 }
 function safeThreadName(order, status) {
   const meta = discordStatusMeta(status);
-  const company = String(order.company || 'Entreprise').replace(/\s+/g, ' ').trim();
-  return `${meta.emoji} ${order.id} · ${company} · ${meta.label}`.slice(0, 100);
+  const company = String(order.company || 'Commande').replace(/\s+/g, ' ').trim();
+  return `${meta.emoji} ${meta.label} · ${company}`.slice(0, 100);
 }
 async function waitForDiscordReady(timeoutMs = 8000) {
   if (!DISCORD_BOT_TOKEN) return false;
