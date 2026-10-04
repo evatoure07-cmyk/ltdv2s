@@ -173,6 +173,25 @@ html,body{height:100%;font-family:'Lato',sans-serif;background:var(--sand);color
 .contact-del-btn:hover{opacity:.7}
 .contact-add-row{display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:.65rem;margin-top:1rem;align-items:end}
 
+/* ── COMPTABILITÉ & PERFORMANCE ── */
+.perf-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.75rem;margin-bottom:1.25rem}
+.perf-card{background:#FFF8EA;border:1.5px solid var(--border);border-radius:6px;padding:1.1rem;box-shadow:var(--sh)}
+.perf-card .k{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted);font-weight:700}
+.perf-card .v{font-family:'Playfair Display',serif;font-size:1.65rem;color:var(--brown);font-weight:700;margin-top:.3rem}
+.perf-card .s{font-size:10px;color:var(--text-muted);margin-top:.25rem}
+.perf-section{background:#FFF8EA;border:1.5px solid var(--border);border-radius:6px;padding:1.2rem;margin-bottom:1rem;box-shadow:var(--sh)}
+.perf-section h3{font-family:'Playfair Display',serif;color:var(--text-mid);margin:0 0 .85rem}
+.goal-line{margin:.8rem 0}
+.goal-head{display:flex;justify-content:space-between;gap:1rem;font-size:11px;font-weight:700;color:var(--text-mid);margin-bottom:.35rem}
+.goal-track{height:10px;background:#E7D5BE;border-radius:999px;overflow:hidden}
+.goal-fill{height:100%;background:var(--brown-mid);border-radius:999px}
+.perf-actions{display:flex;gap:.6rem;flex-wrap:wrap;margin-bottom:1rem}
+.perf-two{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+.perf-top-row{display:flex;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid var(--border);font-size:12px}
+.perf-top-row:last-child{border-bottom:none}
+.report-card{background:#F8EDDC;border:1px solid var(--border);border-radius:5px;padding:.9rem;margin-top:.6rem}
+@media(max-width:850px){.perf-grid{grid-template-columns:repeat(2,1fr)}.perf-two{grid-template-columns:1fr}}
+
 /* ── ADMIN ── */
 .admin-tabs{display:flex;border-bottom:2px solid var(--border);margin-bottom:1.5rem}
 .admin-tab{background:none;border:none;border-bottom:3px solid transparent;padding:.65rem 1.25rem;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted);cursor:pointer;font-family:'Lato',sans-serif;font-weight:700;margin-bottom:-2px;transition:all .2s}
@@ -481,6 +500,8 @@ let orders=[];
 let companies=[];
 let products=[];
 let categories=[];
+let performanceSettings={weeklyCA:0,monthlyCA:0,productGoals:{}};
+let weeklyReports=[];
 
 const FULL_CACHE_KEY='ltd_full_data_v2';
 const ADMIN_DIRTY_KEY='ltd_admin_unsaved_v1';
@@ -543,7 +564,7 @@ async function saveAllAdminChanges(opts={}){
 }
 
 function snapshotState(){
-  return {schemaVersion:3,revision:dataRevision,orders,companies,products,categories,updatedAt:dataUpdatedAt||Date.now()};
+  return {schemaVersion:4,revision:dataRevision,orders,companies,products,categories,performanceSettings,weeklyReports,updatedAt:dataUpdatedAt||Date.now()};
 }
 function saveFullLocal(){
   try{
@@ -564,6 +585,9 @@ function applyState(d){
   companies=Array.isArray(d.companies)?d.companies:companies;
   products=Array.isArray(d.products)?d.products:products;
   categories=Array.isArray(d.categories)?d.categories:categories;
+  performanceSettings=d.performanceSettings&&typeof d.performanceSettings==='object'?d.performanceSettings:performanceSettings;
+  performanceSettings.productGoals=performanceSettings.productGoals&&typeof performanceSettings.productGoals==='object'?performanceSettings.productGoals:{};
+  weeklyReports=Array.isArray(d.weeklyReports)?d.weeklyReports:weeklyReports;
   dataUpdatedAt=Number(d.updatedAt||d._updatedAt||0)||dataUpdatedAt;
   dataRevision=Number(d.revision||0)||dataRevision;
 }
@@ -1234,6 +1258,7 @@ function setupAdminApp(){
     {id:'aprods',icon:'📦',label:'Produits'},
     {id:'acos',icon:'🏢',label:'Entreprises'},
     {id:'ainfo',icon:'ℹ️',label:'Infos entreprises'},
+    {id:'aperf',icon:'📊',label:'Comptabilité & Performance'},
     {id:'gsheet',icon:'↗',label:'Google Sheet'},
   ];
   renderSidebar(nav,'aorders');
@@ -1250,11 +1275,1463 @@ function showAdminPanel(id){
   else if(id==='aprods'){setTopbar('Produits','Administration');renderAdminProducts(content)}
   else if(id==='acos'){setTopbar('Entreprises','Administration');renderAdminCompanies(content)}
   else if(id==='ainfo'){setTopbar('Infos entreprises','Administration');renderAdminInfo(content)}
+  else if(id==='aperf'){setTopbar('Comptabilité & Performance','Direction');renderPerformance(content)}
   else if(id==='gsheet'){
     window.open('https://docs.google.com/spreadsheets/d/1C-pUT6rwR5ZA7o-XTfGm1pcZXRarKmAGKjwaU28mxOM/edit','_blank','noopener,noreferrer');
     document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
     document.getElementById('nav-aorders')?.classList.add('active');
   }
+}
+
+// ═══ COMPTABILITÉ & PERFORMANCE ═══
+const GOOGLE_SHEET_URL='https://docs.google.com/spreadsheets/d/1C-pUT6rwR5ZA7o-XTfGm1pcZXRarKmAGKjwaU28mxOM/edit';
+function isDirection(){return ['Patron','Co-Patron'].includes(curAdmRole)}
+function orderMoment(o){
+  if(Number(o?.createdTs)>0)return new Date(Number(o.createdTs));
+  const raw=String(o?.createdAt||o?.date||'');
+  const m=raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  return m?new Date(+m[3],+m[2]-1,+m[1],12):new Date();
+}
+function mondayStart(d=new Date()){
+  const x=new Date(d);x.setHours(0,0,0,0);x.setDate(x.getDate()-((x.getDay()+6)%7));return x;
+}
+function monthStartDate(d=new Date()){return new Date(d.getFullYear(),d.getMonth(),1)}
+function activeOrders(){return orders.filter(o=>!['cancel','cancelled'].includes(String(o.status||'').toLowerCase()))}
+function inRange(o,start,end){const d=orderMoment(o);return d>=start&&d<end}
+function statsFor(list){
+  const ca=list.reduce((s,o)=>s+Number(o.total||0),0);
+  return {ca,count:list.length,avg:list.length?Math.round(ca/list.length):0};
+}
+function productRanking(list){
+  const m={};
+  list.forEach(o=>(o.products||[]).forEach(p=>{
+    const k=p.name||'Article',q=Number(p.qty||0),r=q*Number(p.price||0);
+    if(!m[k])m[k]={name:k,qty:0,revenue:0,orders:new Set()};
+    m[k].qty+=q;m[k].revenue+=r;m[k].orders.add(o.id);
+  }));
+  return Object.values(m).map(x=>({...x,ordersCount:x.orders.size})).sort((a,b)=>b.qty-a.qty);
+}
+function companyRanking(list){
+  const m={};list.forEach(o=>{const k=o.company||'—';if(!m[k])m[k]={name:k,orders:0,ca:0};m[k].orders++;m[k].ca+=Number(o.total||0)});
+  return Object.values(m).sort((a,b)=>b.ca-a.ca);
+}
+function courierRanking(list){
+  const m={};list.forEach(o=>{const k=o.deliveredBy||o.assignedTo||'Non renseigné';if(!m[k])m[k]={name:k,orders:0,ca:0};m[k].orders++;m[k].ca+=Number(o.total||0)});
+  return Object.values(m).sort((a,b)=>b.orders-a.orders);
+}
+function pct(v,t){return t>0?Math.min(100,Math.round(v/t*100)):0}
+function money(n){return '
+function renderAdminOrders(container){
+  const ca=orders.filter(o=>o.status!=='cancel').reduce((s,o)=>s+o.total,0);
+  const pending=orders.filter(o=>o.status==='pending').length;
+  const done=orders.filter(o=>o.status==='done').length;
+  container.innerHTML=`
+    <div class="admin-stats">
+      <div class="astat"><span class="astat-val astat-gold">$${ca.toLocaleString()}</span><span class="astat-label">CA Total</span></div>
+      <div class="astat"><span class="astat-val astat-blue">${orders.length}</span><span class="astat-label">Commandes</span></div>
+      <div class="astat"><span class="astat-val astat-red">${pending}</span><span class="astat-label">En attente</span></div>
+      <div class="astat"><span class="astat-val astat-green">${done}</span><span class="astat-label">Livrées</span></div>
+    </div>
+    <div class="toolbar">
+      <input class="search-box" type="text" placeholder="🔍 Rechercher..." id="ao-search" oninput="filterAdminOrders()">
+      <select class="filter-sel" id="ao-status" onchange="filterAdminOrders()">
+        <option value="">Tous statuts</option>
+        <option value="pending">En attente</option>
+        <option value="validated">Validées</option>
+        <option value="ready">Prêtes</option>
+        <option value="done">Livrées</option>
+        <option value="cancel">Annulées</option>
+      </select>
+      <select class="filter-sel" id="ao-company" onchange="filterAdminOrders()">
+        <option value="">Toutes entreprises</option>
+        ${[...new Set(orders.map(o=>o.company).filter(Boolean))].sort().map(c=>`<option value="${c}">${c}</option>`).join('')}
+      </select>
+      <button class="btn btn-sm" onclick="exportAllCSV()">Exporter CSV</button>
+    </div>
+    <div id="ao-table-wrap" style="overflow-x:auto">
+      <table class="data-table">
+        <thead><tr><th>#</th><th>Entreprise</th><th>Produits</th><th>Date</th><th>Montant</th><th>Statut</th><th>Action</th></tr></thead>
+        <tbody id="ao-tbody"></tbody>
+      </table>
+    </div>`;
+  renderAdminOrderRows(orders);
+}
+
+function filterAdminOrders(){
+  const q=(document.getElementById('ao-search').value||'').toLowerCase();
+  const fS=document.getElementById('ao-status').value;
+  const fC=document.getElementById('ao-company').value;
+  const filtered=orders.filter(o=>{
+    if(fS&&o.status!==fS)return false;
+    if(fC&&o.company!==fC)return false;
+    if(q&&!(o.id+' '+o.company+' '+(o.products||[]).map(p=>p.name).join(' ')).toLowerCase().includes(q))return false;
+    return true;
+  });
+  renderAdminOrderRows(filtered);
+}
+
+function renderAdminOrderRows(list){
+  const tbody=document.getElementById('ao-tbody');if(!tbody)return;
+  if(!list.length){tbody.innerHTML='<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted)">Aucune commande</td></tr>';return}
+  tbody.innerHTML=[...list].reverse().map(o=>`
+    <tr>
+      <td style="font-size:10px;font-weight:700;color:var(--text-muted)">${o.id}</td>
+      <td><div class="cell-name">${o.company||'—'}</div><div style="font-size:10px;color:var(--text-muted)">${o.tel||''}</div></td>
+      <td style="font-size:11px;color:var(--text-mid)">${(o.products||[]).map(p=>p.qty+'× '+p.name).join('<br>')}</td>
+      <td style="font-size:11px">${o.date}<br><span style="color:var(--text-muted)">${o.horaire}</span></td>
+      <td><span class="cell-amount">$${(o.total||0).toLocaleString()}</span></td>
+      <td><span class="sbadge ${STATUS_BADGE[o.status]||''}">${STATUS_LABELS[o.status]||o.status}</span></td>
+      <td><button class="btn-outline btn-sm" onclick="openOrderDetail('${o.id}')">Gérer</button></td>
+    </tr>`).join('');
+}
+
+function openOrderDetail(id){
+  const o=orders.find(x=>x.id===id);if(!o)return;
+  document.getElementById('odm-title').textContent='Commande '+o.id;
+  document.getElementById('odm-body').innerHTML=`
+    ${[['Entreprise',o.company],['Téléphone',o.tel],['IBAN',o.iban],['Adresse',o.adresse],['Date',o.date],['Horaire',o.horaire],
+      ['Produits',(o.products||[]).map(p=>p.qty+'× '+p.name+' ($'+p.qty*p.price+')').join(' · ')],
+      ['Poids',o.weight+' kg'],['Livraison',o.freeDelivery?'Offerte':'$50'],
+      ['Total','`<div class="detail-row"><span class="detail-key">${k}</span><span class="detail-val">${v||'—'}</span></div>`).join('')}
+    <div style="margin-top:1rem">
+      <label class="form-label">Livreur / responsable</label>
+      <input class="form-input" id="odm-deliverer" value="${o.deliveredBy||o.assignedTo||''}" placeholder="Nom du livreur">
+    </div>
+    <div style="margin-top:1rem">
+      <label class="form-label">Changer le statut</label>
+      <select class="status-select" id="odm-status-sel">
+        ${['pending','validated','ready','done','cancel'].map(s=>`<option value="${s}" ${o.status===s?'selected':''}>${STATUS_LABELS[s]}</option>`).join('')}
+      </select>
+    </div>`;
+  document.getElementById('odm-actions').innerHTML=`
+    <button class="btn" onclick="applyOrderStatus('${o.id}')">✓ Appliquer le statut</button>
+    <button class="btn-danger" onclick="deleteOrderConfirm('${o.id}')">🗑 Supprimer</button>
+    <button class="btn-outline" onclick="closeModal('order-detail-modal')">Fermer</button>`;
+  document.getElementById('order-detail-modal').classList.add('open');
+}
+
+function applyOrderStatus(id){
+  const sel=document.getElementById('odm-status-sel');
+  if(!sel)return;
+  const newStatus=sel.value;
+  const idx=orders.findIndex(o=>o.id===id);
+  if(idx<0)return;
+  const oldStatus=orders[idx].status;
+  const courier=(document.getElementById('odm-deliverer')?.value||'').trim();
+  if(courier)orders[idx].deliveredBy=courier;
+  orders[idx].status=newStatus;
+  orders[idx].statusHistory=orders[idx].statusHistory||[];
+  orders[idx].statusHistory.push({status:newStatus,date:new Date().toLocaleDateString('fr-FR'),time:new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})});
+  // Sync to company history
+  const o=orders[idx];
+  if(o.companyId){
+    const key='ltd_hist_'+o.companyId;
+    const hist=JSON.parse(localStorage.getItem(key)||'[]');
+    const hi=hist.findIndex(h=>h.id===id);
+    if(hi>=0){hist[hi].status=newStatus;localStorage.setItem(key,JSON.stringify(hist))}
+  }
+  markAdminDirty();
+  closeModal('order-detail-modal');
+  renderAdminOrders(document.getElementById('main-content'));
+  showToast('✅ Statut mis à jour : '+STATUS_LABELS[newStatus]);
+}
+
+function deleteOrderConfirm(id){
+  showWarn('Supprimer la commande '+id+' ?',()=>{
+    const idx=orders.findIndex(o=>o.id===id);
+    if(idx>=0){orders.splice(idx,1);markAdminDirty()}
+    closeModal('order-detail-modal');
+    renderAdminOrders(document.getElementById('main-content'));
+    showToast('✅ Commande supprimée');
+  });
+}
+
+function notifyDiscordStatus(order){fetch('/api/discord/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({orderId:order.id,status:order.status})}).catch(()=>{});}
+
+function exportAllCSV(){
+  const h='ID,Entreprise,Tel,Date,Horaire,Produits,Total,Statut\n';
+  const rows=orders.map(o=>[o.id,'"'+(o.company||'')+'"',o.tel,o.date,o.horaire,'"'+(o.products||[]).map(p=>p.qty+'x'+p.name).join(', ')+'"',o.total,o.status].join(',')).join('\n');
+  const blob=new Blob([h+rows],{type:'text/csv;charset=utf-8;'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='commandes_ltd.csv';a.click();
+}
+
+function renderAdminInfo(container){
+  const lastSave=Number(localStorage.getItem('ltd_last_remote_save')||0);
+  container.innerHTML=`
+    <div class="system-card">
+      <div class="system-card-head">
+        <div><h3 style="margin:0 0 .2rem">☁ Sauvegarde & sécurité</h3><div style="font-size:11px;color:var(--text-muted)">Diagnostic du stockage, sauvegarde de secours et restauration.</div></div>
+        <div class="system-actions">
+          <button class="btn-outline btn-sm" onclick="showSystemStatus()">Tester le stockage</button>
+          <button class="btn-outline btn-sm" onclick="exportBackupJson()">⬇ Exporter backup</button>
+          <button class="btn-outline btn-sm" onclick="openBackupImport()">⬆ Importer backup</button>
+        </div>
+      </div>
+      <div class="system-status">
+        <div><span class="system-dot ${adminDirty?'bad':'ok'}"></span>${adminDirty?'Des modifications attendent une sauvegarde distante.':'Aucune modification admin en attente.'}</div>
+        <div>Dernière sauvegarde distante depuis ce navigateur : <strong>${lastSave?new Date(lastSave).toLocaleString('fr-FR'):'Aucune'}</strong></div>
+        <div>Conseil : exportez ponctuellement un backup JSON après de grosses modifications.</div>
+      </div>
+    </div>
+    <div class="admin-section-head"><div><h2>Informations entreprises</h2><p style="color:var(--text-muted);font-size:11px">Retrouve ici les informations saisies par chaque entreprise, notamment les IBAN.</p></div></div>
+    <div class="companies-grid">${companies.map(co=>`<div class="enterprise-card"><div class="enterprise-card-title">🏢 ${co.name}</div><div class="info-grid"><div class="info-box"><span>IBAN</span><strong>${co.iban||'Non renseigné'}</strong></div><div class="info-box"><span>Statut</span><strong>${co.active===false?'Suspendu':'Actif'}</strong></div><div class="info-box"><span>Contacts</span><strong>${(co.contacts||[]).length}</strong></div><div class="info-box"><span>Note</span><strong>${co.note||'—'}</strong></div></div><div style="margin-top:.8rem"><button class="btn-outline btn-sm" onclick="openCompanyInfo(${companies.indexOf(co)})">Voir le détail</button></div></div>`).join('')}</div>`;
+}
+
+// ═══ ADMIN PRODUCTS ═══
+function renderAdminProducts(container){
+  const canEdit=curAdmRole==='Patron';
+  container.innerHTML=`
+    ${canEdit?`<div class="add-form-box">
+      <h3>Ajouter un produit</h3>
+      <div class="add-form-row">
+        <div><label class="form-label">Icône</label><input type="text" class="form-input" id="np-icon" placeholder="🌿" style="font-size:1.1rem;text-align:center"></div>
+        <div><label class="form-label">Nom</label><input type="text" class="form-input" id="np-name" placeholder="Nom du produit"></div>
+        <div><label class="form-label">Poids</label><input type="text" class="form-input" id="np-unit" placeholder="0.5"></div>
+        <div><label class="form-label">Prix $</label><input type="number" class="form-input" id="np-price" placeholder="10" min="0"></div>
+        <div><label class="form-label">Catégorie</label><select class="form-input" id="np-cat">${categories.map(c=>`<option value="${c.name}">${c.icon} ${c.name}</option>`).join('')}<option value="__new">＋ Nouvelle catégorie</option></select></div>
+        <div style="margin-top:auto"><button class="btn btn-sm" onclick="addProduct()">+ Ajouter</button></div>
+      </div>
+    </div>`:''}
+    <div class="category-manager">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
+        <div><h3 style="margin-bottom:.2rem">Catégories</h3><div style="font-size:11px;color:var(--text-muted)">Crée, renomme ou supprime les catégories du catalogue.</div></div>
+        ${canEdit?'<button class="btn btn-sm" onclick="addCategory()">＋ Ajouter une catégorie</button>':''}
+      </div>
+      <div class="category-list">${categories.map((c,i)=>`<div class="category-chip"><span>${c.icon} ${c.name}</span>${canEdit?`<button onclick="editCategory(${i})">✎</button><button onclick="deleteCategory(${i})">×</button>`:''}</div>`).join('')}</div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:1rem;gap:.5rem">
+      ${canEdit?'<button class="btn-danger btn-sm" onclick="resetCatalogue()">🔄 Réinitialiser</button>':''}
+    </div>
+    <div class="prod-grid" id="prod-admin-grid"></div>`;
+  renderProdGrid(canEdit);
+}
+
+function renderProdGrid(canEdit){
+  const canE=canEdit??curAdmRole==='Patron';
+  document.getElementById('prod-admin-grid').innerHTML=products.map((p,i)=>`
+    <div class="prod-card">
+      <div class="prod-card-icon">${p.icon}</div>
+      <div class="prod-card-name">${p.name}</div>
+      <div class="prod-card-info">${p.unit} kg/u · ${p.cat||'—'}</div>
+      <div class="prod-card-price">$${p.price}</div>
+      ${p.destockage?'<span class="sbadge sbadge-cancel" style="margin-bottom:.5rem">Déstockage</span>':''}
+      ${canE?`<div class="prod-card-actions">
+        <button class="btn-outline btn-sm" onclick="editProd(${i})">Modifier</button>
+        <button class="btn-outline btn-sm" onclick="toggleDestockage(${i})">${p.destockage?'Normal':'Déstock'}</button>
+        <button class="btn-danger btn-sm" onclick="deleteProd(${i})">✕</button>
+      </div>`:''}
+    </div>`).join('');
+}
+
+function addProduct(){
+  const icon=document.getElementById('np-icon').value.trim()||'📦';
+  const name=document.getElementById('np-name').value.trim();
+  const unit=document.getElementById('np-unit').value.trim();
+  const price=parseFloat(document.getElementById('np-price').value);
+  let cat=document.getElementById('np-cat').value;
+  if(cat==='__new'){cat=prompt('Nom de la nouvelle catégorie :','Nouvelle catégorie')?.trim()||''; if(!cat)return; if(!categories.find(c=>c.name===cat))categories.push({name:cat,icon:prompt('Icône de la catégorie :','📦')||'📦'});}
+  if(!name||isNaN(price)||!cat){showToast('⚠ Nom, prix et catégorie requis');return}
+  products.push({id:'prod_'+Date.now(),icon,name,unit:unit||'0.5',price,cat});
+  markAdminDirty();['np-icon','np-name','np-unit','np-price'].forEach(id=>document.getElementById(id).value='');
+  renderAdminProducts(document.getElementById('main-content'));showToast('✅ Produit ajouté');
+}
+
+function editProd(i){
+  const p=products[i];
+  const name=prompt('Nom :',p.name);if(name===null)return;
+  const price=parseFloat(prompt('Prix ($) :',p.price));if(isNaN(price))return;
+  const icon=prompt('Icône :',p.icon)||p.icon;
+  products[i]={...p,name,price,icon};
+  markAdminDirty();renderProdGrid(true);showToast('✅ Produit modifié');
+}
+
+function toggleDestockage(i){
+  products[i].destockage=!products[i].destockage;
+  markAdminDirty();renderProdGrid(true);
+  showToast(products[i].destockage?'🏷 Déstockage activé':'✅ Déstockage désactivé');
+}
+
+function deleteProd(i){
+  showWarn('Supprimer "'+products[i].name+'" ?',()=>{
+    products.splice(i,1);markAdminDirty();renderProdGrid(true);showToast('✅ Produit supprimé');
+  });
+}
+
+function addCategory(){
+  const name=prompt('Nom de la catégorie :','Nouvelle catégorie')?.trim(); if(!name)return;
+  if(categories.some(c=>c.name.toLowerCase()===name.toLowerCase())){showToast('⚠ Catégorie déjà existante');return}
+  const icon=prompt('Icône :','📦')||'📦'; categories.push({name,icon}); markAdminDirty(); renderAdminProducts(document.getElementById('main-content')); showToast('✅ Catégorie créée');
+}
+function editCategory(i){
+  const c=categories[i]; const name=prompt('Nom :',c.name)?.trim(); if(!name)return; const icon=prompt('Icône :',c.icon)||c.icon; const old=c.name; categories[i]={name,icon}; products.forEach(p=>{if(p.cat===old)p.cat=name}); markAdminDirty(); renderAdminProducts(document.getElementById('main-content')); showToast('✅ Catégorie modifiée');
+}
+function deleteCategory(i){
+  const c=categories[i]; if(products.some(p=>p.cat===c.name)){showToast('⚠ Cette catégorie contient encore des produits');return}
+  showWarn('Supprimer la catégorie « '+c.name+' » ?',()=>{categories.splice(i,1);markAdminDirty();renderAdminProducts(document.getElementById('main-content'));showToast('✅ Catégorie supprimée')});
+}
+
+function resetCatalogue(){
+  showWarn('Réinitialiser tout le catalogue aux prix par défaut ?',()=>{
+    products=applySmartProductIcons(defaultProducts());categories=[...new Set(products.map(p=>p.cat).filter(Boolean))].map(name=>({name,icon:(CAT_ICONS[name]||'📦')}));markAdminDirty();renderAdminProducts(document.getElementById('main-content'));showToast('✅ Catalogue réinitialisé');
+  });
+}
+
+// ═══ ADMIN COMPANIES ═══
+function renderAdminCompanies(container){
+  const canEdit=curAdmRole==='Patron';
+  container.innerHTML=`
+    ${canEdit?`<div class="add-form-box">
+      <h3>Créer un compte entreprise</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:.65rem;align-items:end">
+        <div><label class="form-label">Nom</label><input type="text" class="form-input" id="nco-name" placeholder="Sandy Corp..."></div>
+        <div><label class="form-label">Note</label><input type="text" class="form-input" id="nco-note" placeholder="Optionnel..."></div>
+        <div style="margin-top:auto"><button class="btn btn-sm" onclick="createCompany()">+ Créer</button></div>
+      </div>
+    </div>`:''}
+    <div class="companies-grid" id="co-grid"></div>`;
+  renderCoGrid(canEdit);
+}
+
+function renderCoGrid(canEdit){
+  const canE=canEdit??curAdmRole==='Patron';
+  const grid=document.getElementById('co-grid');
+  if(!companies.length){grid.innerHTML='<div class="empty"><span class="empty-icon">🏢</span>Aucune entreprise.</div>';return}
+  grid.innerHTML=companies.map((co,i)=>`
+    <div class="co-card ${co.active!==false?'co-active':''}">
+      <div class="co-card-name">🏢 ${co.name} ${co.permanent?'<span style="font-size:9px;color:var(--green);border:1px solid rgba(46,125,79,.3);padding:1px 6px;border-radius:20px">Permanent</span>':''}
+        ${co.active===false?'<span style="font-size:9px;color:var(--red);border:1px solid rgba(139,26,26,.3);padding:1px 6px;border-radius:20px">Suspendu</span>':''}
+      </div>
+      <div class="co-card-meta">${co.note||'—'} · ${co.createdAt||''}</div>
+      <div class="co-card-pw">MDP : <span>${co.password}</span>
+        <button onclick="navigator.clipboard.writeText('${co.password}');showToast('✓ Copié !')" style="background:none;border:none;cursor:pointer;color:var(--brown-mid);font-size:11px">📋</button>
+      </div>
+      ${canE?`<div class="co-card-actions">
+        <button class="btn-outline btn-sm" onclick="openPriceModal(${i})">💰 Prix perso</button>
+        <button class="btn-outline btn-sm" onclick="openCompanyInfo(${i})">ℹ Infos</button>
+        <button class="btn-outline btn-sm" onclick="openCompanySettings(${i})">⚙ Réglages</button>
+      </div>`:''}
+    </div>`).join('');
+}
+
+function createCompany(){
+  const name=document.getElementById('nco-name').value.trim();
+  const note=document.getElementById('nco-note').value.trim();
+  if(!name){showToast('⚠ Entrez un nom');return}
+  if(companies.find(c=>c.name.toLowerCase()===name.toLowerCase())){showToast('⚠ Entreprise déjà existante');return}
+  const pw=genPW();
+  companies.push({id:genId(),name,password:pw,note,customPrices:{},active:true,createdAt:new Date().toLocaleDateString('fr-FR'),contacts:[],iban:''});
+  markAdminDirty();
+  document.getElementById('nco-name').value='';document.getElementById('nco-note').value='';
+  renderCoGrid(true);
+  navigator.clipboard.writeText(pw).catch(()=>{});
+  showToast('✅ Compte créé ! MDP: '+pw,4000);
+}
+
+function resetCoMdp(i){
+  const pw=genPW();companies[i].password=pw;markAdminDirty();renderCoGrid(true);
+  navigator.clipboard.writeText(pw).catch(()=>{});
+  showToast('✅ Nouveau mdp: '+pw,4000);
+}
+
+function toggleCoActive(i){
+  const co=companies[i];
+  const isSuspended=co.active===false;
+  const action=isSuspended?'Réactiver':'Suspendre';
+  showWarn(action+' l’entreprise « '+co.name+' » ?',()=>{
+    companies[i].active=isSuspended;
+    markAdminDirty();
+    renderCoGrid(true);
+    showToast(isSuspended?'✅ Entreprise réactivée':'⏸ Entreprise suspendue');
+  },action);
+}
+
+function deleteCo(i){
+  showWarn('Supprimer "'+companies[i].name+'" ?',()=>{
+    companies.splice(i,1);markAdminDirty();renderCoGrid(true);showToast('✅ Entreprise supprimée');
+  });
+}
+
+function openCompanyInfo(i){
+  const co=companies[i]; document.getElementById('company-info-title').textContent='Infos — '+co.name;
+  document.getElementById('company-info-body').innerHTML=`<div class="info-grid">${[['Entreprise',co.name],['IBAN',co.iban||'Non renseigné'],['Contacts',(co.contacts||[]).length+' contact(s)'],['Création',co.createdAt||'—'],['Statut',co.active===false?'Suspendu':'Actif'],['Note',co.note||'—']].map(([k,v])=>`<div class="info-box"><span>${k}</span><strong>${v}</strong></div>`).join('')}</div><div style="margin-top:1rem"><h3>Contacts</h3>${(co.contacts||[]).map(c=>`<div class="detail-row"><span class="detail-key">${c.name}</span><span class="detail-val">${c.phone}${c.note?' · '+c.note:''}</span></div>`).join('')||'<div class="empty">Aucun contact renseigné.</div>'}</div>`;
+  document.getElementById('company-info-modal').classList.add('open');
+}
+function openCompanySettings(i){
+  const co=companies[i]; document.getElementById('company-settings-title').textContent='Réglages — '+co.name;
+  document.getElementById('company-settings-body').innerHTML=`<div class="settings-list"><button class="settings-action" onclick="viewAsCompany(${i})"><span>👁</span><div><b>Voir comme l’entreprise</b><small>Ouvrir exactement son espace client.</small></div></button><button class="settings-action" onclick="resetCoMdp(${i})"><span>🔑</span><div><b>Réinitialiser le mot de passe</b><small>Générer un nouveau mot de passe.</small></div></button><button class="settings-action" onclick="closeModal('company-settings-modal');toggleCoActive(${i})"><span>${co.active===false?'▶':'⏸'}</span><div><b>${co.active===false?'Réactiver':'Suspendre'} le compte</b><small>${co.active===false?'Autoriser à nouveau la connexion.':'Bloquer temporairement la connexion.'}</small></div></button>${!co.permanent?`<button class="settings-action danger" onclick="deleteCo(${i});closeModal('company-settings-modal')"><span>🗑</span><div><b>Supprimer le compte</b><small>Supprimer définitivement l’entreprise.</small></div></button>`:''}</div>`;
+  document.getElementById('company-settings-actions').innerHTML=`<button class="btn-outline" onclick="closeModal('company-settings-modal')">Fermer</button>`; document.getElementById('company-settings-modal').classList.add('open');
+}
+function viewAsCompany(i){const co=companies[i];closeModal('company-settings-modal');curCo={...co};mode='company';sessionStorage.setItem('ltd_session',JSON.stringify({mode:'company',coId:co.id,preview:true}));launchApp();showToast('👁 Aperçu de '+co.name)}
+
+// ═══ PRICE MODAL ═══
+function openPriceModal(i){
+  editCoIdx=i;const co=companies[i];
+  document.getElementById('pm-title').textContent='Prix — '+co.name;
+  document.getElementById('price-rows').innerHTML=products.map(p=>{
+    const custom=co.customPrices?.[p.id]!==undefined?co.customPrices[p.id]:'';
+    const hasC=custom!=='';
+    return `<div class="price-row">
+      <div style="font-size:11px;color:var(--text-mid);font-weight:600">${p.icon} ${p.name}</div>
+      <div style="text-align:center;font-size:11px;color:var(--text-muted);font-weight:700">$${p.price}</div>
+      <div><input class="price-input" type="number" min="0" id="cp-${p.id}" value="${custom}" placeholder="${p.price}"></div>
+      <div style="text-align:center;font-size:9px;font-weight:700;color:${hasC?'var(--blue)':'var(--text-muted)'}" id="cpb-${p.id}">${hasC?'Perso':'Standard'}</div>
+    </div>`;
+  }).join('');
+  products.forEach(p=>{
+    const inp=document.getElementById('cp-'+p.id);
+    if(inp)inp.addEventListener('input',()=>{
+      const b=document.getElementById('cpb-'+p.id);
+      if(b){const isP=inp.value!==''&&inp.value!=p.price.toString();b.textContent=isP?'Perso':'Standard';b.style.color=isP?'var(--blue)':'var(--text-muted)'}
+    });
+  });
+  document.getElementById('price-modal').classList.add('open');
+}
+
+function savePrices(){
+  if(editCoIdx===null)return;
+  const cp={};
+  products.forEach(p=>{const v=document.getElementById('cp-'+p.id)?.value;if(v!==''&&v!==undefined&&!isNaN(parseFloat(v)))cp[p.id]=parseFloat(v)});
+  companies[editCoIdx].customPrices=cp;markAdminDirty();closeModal('price-modal');renderCoGrid(true);showToast('💾 Prix modifiés — sauvegarde automatique en cours');
+}
+
+// ═══ SYNC ═══
+let syncInterval=null;
+async function syncFromServer(){
+  if(mode==='admin'&&adminDirty)return;
+  try{
+    const r=await fetch('/api/data',{cache:'no-store'});
+    if(!r.ok)return;
+    const d=await r.json();
+    const serverTs=Number(d.updatedAt||d._updatedAt||0)||0;
+    const localTs=Number(dataUpdatedAt||0)||0;
+
+    // Ne jamais écraser une modification locale récente avec une ancienne copie serveur.
+    if(localTs>serverTs){
+      if(!adminDirty) pushToServer({silent:true,keepTimestamp:true});
+      return;
+    }
+    if(serverTs<=localTs)return;
+
+    applyState(d);
+    DEFAULT_COMPANIES.forEach(def=>{if(!companies.find(c=>c.id===def.id))companies.push({...def})});
+    if(!products.length)products=applySmartProductIcons(defaultProducts());
+    if(!categories.length)categories=[...new Set(products.map(p=>p.cat).filter(Boolean))].map(name=>({name,icon:(CAT_ICONS[name]||'📦')}));
+    saveFullLocal();
+
+    if(mode==='company'){
+      if(curCo){const fresh=companies.find(c=>c.id===curCo.id);if(fresh)curCo={...fresh}}
+      const active=document.querySelector('.nav-item.active')?.id||'';
+      if(active==='nav-hist') renderHistory(document.getElementById('main-content'));
+      if(active==='nav-cmd') renderCatalogue(document.getElementById('main-content'));
+    } else if(mode==='admin'){
+      const active=document.querySelector('.nav-item.active')?.id||'';
+      if(active==='nav-aorders') renderAdminOrders(document.getElementById('main-content'));
+      if(active==='nav-aprod') renderAdminProducts(document.getElementById('main-content'));
+      if(active==='nav-aco') renderAdminCompanies(document.getElementById('main-content'));
+    }
+  }catch(e){}
+}
+function startSync(){if(syncInterval)return;syncInterval=setInterval(syncFromServer,6000)}
+window.addEventListener('beforeunload',e=>{if(mode==='admin'&&adminDirty){e.preventDefault();e.returnValue=''}});
+
+// ═══ INIT ═══
+(async function(){
+  await loadFromServer();
+  // Session restore
+  const sess=sessionStorage.getItem('ltd_session');
+  if(sess){
+    try{
+      const s=JSON.parse(sess);
+      if(s.mode==='admin'&&ADMIN_ACCS[Object.keys(ADMIN_ACCS).find(k=>ADMIN_ACCS[k].role===s.role)]){
+        curAdmRole=s.role;mode='admin';launchApp();
+      }else if(s.mode==='company'&&s.coId){
+        const co=companies.find(c=>c.id===s.coId&&c.active!==false);
+        if(co){curCo={...co};mode='company';launchApp();}
+      }
+    }catch(e){}
+  }
+  document.getElementById('co-date')&&(document.getElementById('co-date').min=new Date().toISOString().split('T')[0]);
+  startSync();
+})();
+</script>
+</body>
+</html>
++Math.round(Number(n||0)).toLocaleString('fr-FR')}
+function fmtRange(a,b){const e=new Date(b);e.setDate(e.getDate()-1);return a.toLocaleDateString('fr-FR')+' → '+e.toLocaleDateString('fr-FR')}
+function currentPeriodData(){
+  const now=new Date(), ws=mondayStart(now), we=new Date(ws);we.setDate(we.getDate()+7);
+  const pws=new Date(ws);pws.setDate(pws.getDate()-7), pwe=new Date(ws);
+  const ms=monthStartDate(now), me=new Date(ms.getFullYear(),ms.getMonth()+1,1);
+  const all=activeOrders();
+  return {ws,we,pws,pwe,ms,me,week:all.filter(o=>inRange(o,ws,we)),prevWeek:all.filter(o=>inRange(o,pws,pwe)),month:all.filter(o=>inRange(o,ms,me))};
+}
+function ensureWeeklyReport(){
+  const now=mondayStart(new Date()), end=new Date(now), start=new Date(now);start.setDate(start.getDate()-7);
+  const key=start.toISOString().slice(0,10);
+  if(weeklyReports.some(r=>r.key===key))return;
+  const list=activeOrders().filter(o=>inRange(o,start,end));
+  if(!list.length)return;
+  const st=statsFor(list),pr=productRanking(list),cr=companyRanking(list),lr=courierRanking(list);
+  weeklyReports.push({key,range:fmtRange(start,end),ca:st.ca,orders:st.count,avg:st.avg,bestProduct:pr[0]?.name||'—',bestCompany:cr[0]?.name||'—',bestCourier:lr[0]?.name||'—',createdAt:Date.now()});
+  markAdminDirty();
+}
+function savePerformanceGoals(){
+  performanceSettings.weeklyCA=Math.max(0,Number(document.getElementById('goal-weekly-ca')?.value||0));
+  performanceSettings.monthlyCA=Math.max(0,Number(document.getElementById('goal-monthly-ca')?.value||0));
+  markAdminDirty();renderPerformance(document.getElementById('main-content'));showToast('✅ Objectifs CA sauvegardés');
+}
+function saveProductGoal(){
+  const p=document.getElementById('goal-product')?.value;
+  const target=Math.max(0,Number(document.getElementById('goal-product-target')?.value||0));
+  if(!p||!target){showToast('⚠ Choisis un produit et un objectif');return}
+  performanceSettings.productGoals[p]=target;markAdminDirty();renderPerformance(document.getElementById('main-content'));showToast('✅ Objectif produit sauvegardé');
+}
+function removeProductGoal(name){delete performanceSettings.productGoals[name];markAdminDirty();renderPerformance(document.getElementById('main-content'))}
+function exportAccountingCSV(){
+  const p=currentPeriodData(), list=p.month;
+  const h=['ID','Entreprise','Date','Produits','Total','Statut','Livreur'];
+  const rows=list.map(o=>[o.id,o.company||'',o.createdAt||o.date||'',(o.products||[]).map(x=>x.qty+'x '+x.name).join(' | '),Number(o.total||0),o.status||'',o.deliveredBy||o.assignedTo||'']);
+  const esc=v=>'"'+String(v??'').replaceAll('"','""')+'"';
+  const blob=new Blob(['\ufeff'+[h,...rows].map(r=>r.map(esc).join(',')).join('\n')],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='comptabilite_LTD_'+new Date().toISOString().slice(0,7)+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+function renderPerformance(container){
+  if(!isDirection()){container.innerHTML='<div class="empty">Accès réservé à la Direction.</div>';return}
+  ensureWeeklyReport();
+  const p=currentPeriodData(), w=statsFor(p.week), pw=statsFor(p.prevWeek), m=statsFor(p.month);
+  const evo=pw.ca?Math.round((w.ca-pw.ca)/pw.ca*100):(w.ca?100:0);
+  const prods=productRanking(p.week), comps=companyRanking(p.week), couriers=courierRanking(p.week);
+  const wg=Number(performanceSettings.weeklyCA||0),mg=Number(performanceSettings.monthlyCA||0);
+  container.innerHTML=`
+    <div class="perf-actions">
+      <button class="btn" onclick="window.open(GOOGLE_SHEET_URL,'_blank','noopener,noreferrer')">Ouvrir Google Sheet</button>
+      <button class="btn-outline" onclick="exportAccountingCSV()">Exporter comptabilité CSV</button>
+    </div>
+    <div class="perf-grid">
+      <div class="perf-card"><div class="k">CA semaine</div><div class="v">${money(w.ca)}</div><div class="s">${w.count} commande(s)</div></div>
+      <div class="perf-card"><div class="k">Panier moyen</div><div class="v">${money(w.avg)}</div><div class="s">Semaine actuelle</div></div>
+      <div class="perf-card"><div class="k">Évolution</div><div class="v">${evo>=0?'+':''}${evo}%</div><div class="s">vs semaine précédente</div></div>
+      <div class="perf-card"><div class="k">CA mois</div><div class="v">${money(m.ca)}</div><div class="s">${m.count} commande(s)</div></div>
+    </div>
+    <div class="perf-section">
+      <h3>Objectifs CA</h3>
+      <div class="perf-two">
+        <div>
+          <label class="form-label">Objectif semaine</label>
+          <input class="form-input" id="goal-weekly-ca" type="number" min="0" value="${wg}">
+          <div class="goal-line"><div class="goal-head"><span>${money(w.ca)} / ${money(wg)}</span><span>${pct(w.ca,wg)}%</span></div><div class="goal-track"><div class="goal-fill" style="width:${pct(w.ca,wg)}%"></div></div></div>
+        </div>
+        <div>
+          <label class="form-label">Objectif mois</label>
+          <input class="form-input" id="goal-monthly-ca" type="number" min="0" value="${mg}">
+          <div class="goal-line"><div class="goal-head"><span>${money(m.ca)} / ${money(mg)}</span><span>${pct(m.ca,mg)}%</span></div><div class="goal-track"><div class="goal-fill" style="width:${pct(m.ca,mg)}%"></div></div></div>
+        </div>
+      </div>
+      <button class="btn btn-sm" style="margin-top:.75rem" onclick="savePerformanceGoals()">Sauvegarder les objectifs</button>
+    </div>
+    <div class="perf-section">
+      <h3>Objectifs par produit — semaine</h3>
+      <div style="display:grid;grid-template-columns:1fr 160px auto;gap:.6rem;align-items:end;margin-bottom:1rem">
+        <div><label class="form-label">Produit</label><select class="filter-sel" id="goal-product" style="width:100%">${products.map(x=>`<option value="${x.name}">${x.name}</option>`).join('')}</select></div>
+        <div><label class="form-label">Objectif quantité</label><input class="form-input" type="number" min="1" id="goal-product-target"></div>
+        <button class="btn btn-sm" onclick="saveProductGoal()">Ajouter</button>
+      </div>
+      ${Object.entries(performanceSettings.productGoals||{}).map(([name,target])=>{const sold=prods.find(x=>x.name===name)?.qty||0;return `
+        <div class="goal-line"><div class="goal-head"><span>${name} — ${sold} / ${target}</span><span>${pct(sold,target)}% <button class="contact-del-btn" onclick="removeProductGoal('${String(name).replaceAll("'","\\'")}')">Supprimer</button></span></div><div class="goal-track"><div class="goal-fill" style="width:${pct(sold,target)}%"></div></div></div>`}).join('')||'<div style="color:var(--text-muted);font-size:12px">Aucun objectif produit.</div>'}
+    </div>
+    <div class="perf-two">
+      <div class="perf-section"><h3>Produits — Top semaine</h3>${prods.slice(0,5).map((x,i)=>`<div class="perf-top-row"><span>#${i+1} ${x.name}</span><strong>${x.qty} unité(s)</strong></div>`).join('')||'<div class="empty">Pas encore de ventes.</div>'}</div>
+      <div class="perf-section"><h3>Entreprises — Top semaine</h3>${comps.slice(0,5).map((x,i)=>`<div class="perf-top-row"><span>#${i+1} ${x.name}</span><strong>${money(x.ca)}</strong></div>`).join('')||'<div class="empty">Pas encore de commandes.</div>'}</div>
+    </div>
+    <div class="perf-section"><h3>Livreurs</h3>${couriers.slice(0,6).map(x=>`<div class="perf-top-row"><span>${x.name}</span><strong>${x.orders} commande(s)</strong></div>`).join('')}</div>
+    <div class="perf-section">
+      <h3>Rapports automatiques de fin de semaine</h3>
+      ${[...weeklyReports].reverse().slice(0,8).map(r=>`<div class="report-card"><strong>${r.range}</strong><div style="font-size:12px;margin-top:.35rem">CA : ${money(r.ca)} · Commandes : ${r.orders} · Panier moyen : ${money(r.avg)}</div><div style="font-size:11px;color:var(--text-muted);margin-top:.25rem">Meilleur produit : ${r.bestProduct} · Meilleure entreprise : ${r.bestCompany} · Livreur : ${r.bestCourier}</div></div>`).join('')||'<div style="color:var(--text-muted);font-size:12px">Le premier rapport sera créé automatiquement à la fin d’une semaine contenant des commandes.</div>'}
+    </div>`;
+}
+
+// ═══ ADMIN ORDERS ═══
+function renderAdminOrders(container){
+  const ca=orders.filter(o=>o.status!=='cancel').reduce((s,o)=>s+o.total,0);
+  const pending=orders.filter(o=>o.status==='pending').length;
+  const done=orders.filter(o=>o.status==='done').length;
+  container.innerHTML=`
+    <div class="admin-stats">
+      <div class="astat"><span class="astat-val astat-gold">$${ca.toLocaleString()}</span><span class="astat-label">CA Total</span></div>
+      <div class="astat"><span class="astat-val astat-blue">${orders.length}</span><span class="astat-label">Commandes</span></div>
+      <div class="astat"><span class="astat-val astat-red">${pending}</span><span class="astat-label">En attente</span></div>
+      <div class="astat"><span class="astat-val astat-green">${done}</span><span class="astat-label">Livrées</span></div>
+    </div>
+    <div class="toolbar">
+      <input class="search-box" type="text" placeholder="🔍 Rechercher..." id="ao-search" oninput="filterAdminOrders()">
+      <select class="filter-sel" id="ao-status" onchange="filterAdminOrders()">
+        <option value="">Tous statuts</option>
+        <option value="pending">En attente</option>
+        <option value="validated">Validées</option>
+        <option value="ready">Prêtes</option>
+        <option value="done">Livrées</option>
+        <option value="cancel">Annulées</option>
+      </select>
+      <select class="filter-sel" id="ao-company" onchange="filterAdminOrders()">
+        <option value="">Toutes entreprises</option>
+        ${[...new Set(orders.map(o=>o.company).filter(Boolean))].sort().map(c=>`<option value="${c}">${c}</option>`).join('')}
+      </select>
+      <button class="btn btn-sm" onclick="exportAllCSV()">Exporter CSV</button>
+    </div>
+    <div id="ao-table-wrap" style="overflow-x:auto">
+      <table class="data-table">
+        <thead><tr><th>#</th><th>Entreprise</th><th>Produits</th><th>Date</th><th>Montant</th><th>Statut</th><th>Action</th></tr></thead>
+        <tbody id="ao-tbody"></tbody>
+      </table>
+    </div>`;
+  renderAdminOrderRows(orders);
+}
+
+function filterAdminOrders(){
+  const q=(document.getElementById('ao-search').value||'').toLowerCase();
+  const fS=document.getElementById('ao-status').value;
+  const fC=document.getElementById('ao-company').value;
+  const filtered=orders.filter(o=>{
+    if(fS&&o.status!==fS)return false;
+    if(fC&&o.company!==fC)return false;
+    if(q&&!(o.id+' '+o.company+' '+(o.products||[]).map(p=>p.name).join(' ')).toLowerCase().includes(q))return false;
+    return true;
+  });
+  renderAdminOrderRows(filtered);
+}
+
+function renderAdminOrderRows(list){
+  const tbody=document.getElementById('ao-tbody');if(!tbody)return;
+  if(!list.length){tbody.innerHTML='<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted)">Aucune commande</td></tr>';return}
+  tbody.innerHTML=[...list].reverse().map(o=>`
+    <tr>
+      <td style="font-size:10px;font-weight:700;color:var(--text-muted)">${o.id}</td>
+      <td><div class="cell-name">${o.company||'—'}</div><div style="font-size:10px;color:var(--text-muted)">${o.tel||''}</div></td>
+      <td style="font-size:11px;color:var(--text-mid)">${(o.products||[]).map(p=>p.qty+'× '+p.name).join('<br>')}</td>
+      <td style="font-size:11px">${o.date}<br><span style="color:var(--text-muted)">${o.horaire}</span></td>
+      <td><span class="cell-amount">$${(o.total||0).toLocaleString()}</span></td>
+      <td><span class="sbadge ${STATUS_BADGE[o.status]||''}">${STATUS_LABELS[o.status]||o.status}</span></td>
+      <td><button class="btn-outline btn-sm" onclick="openOrderDetail('${o.id}')">Gérer</button></td>
+    </tr>`).join('');
+}
+
+function openOrderDetail(id){
+  const o=orders.find(x=>x.id===id);if(!o)return;
+  document.getElementById('odm-title').textContent='Commande '+o.id;
+  document.getElementById('odm-body').innerHTML=`
+    ${[['Entreprise',o.company],['Téléphone',o.tel],['IBAN',o.iban],['Adresse',o.adresse],['Date',o.date],['Horaire',o.horaire],
+      ['Produits',(o.products||[]).map(p=>p.qty+'× '+p.name+' ($'+p.qty*p.price+')').join(' · ')],
+      ['Poids',o.weight+' kg'],['Livraison',o.freeDelivery?'Offerte':'$50'],
+      ['Total','$'+(o.total||0).toLocaleString()],['Statut actuel',STATUS_LABELS[o.status]||o.status]
+    ].map(([k,v])=>`<div class="detail-row"><span class="detail-key">${k}</span><span class="detail-val">${v||'—'}</span></div>`).join('')}
+    <div style="margin-top:1rem">
+      <label class="form-label">Changer le statut</label>
+      <select class="status-select" id="odm-status-sel">
+        ${['pending','validated','ready','done','cancel'].map(s=>`<option value="${s}" ${o.status===s?'selected':''}>${STATUS_LABELS[s]}</option>`).join('')}
+      </select>
+    </div>`;
+  document.getElementById('odm-actions').innerHTML=`
+    <button class="btn" onclick="applyOrderStatus('${o.id}')">✓ Appliquer le statut</button>
+    <button class="btn-danger" onclick="deleteOrderConfirm('${o.id}')">🗑 Supprimer</button>
+    <button class="btn-outline" onclick="closeModal('order-detail-modal')">Fermer</button>`;
+  document.getElementById('order-detail-modal').classList.add('open');
+}
+
+function applyOrderStatus(id){
+  const sel=document.getElementById('odm-status-sel');
+  if(!sel)return;
+  const newStatus=sel.value;
+  const idx=orders.findIndex(o=>o.id===id);
+  if(idx<0)return;
+  const oldStatus=orders[idx].status;
+  orders[idx].status=newStatus;
+  orders[idx].statusHistory=orders[idx].statusHistory||[];
+  orders[idx].statusHistory.push({status:newStatus,date:new Date().toLocaleDateString('fr-FR'),time:new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})});
+  // Sync to company history
+  const o=orders[idx];
+  if(o.companyId){
+    const key='ltd_hist_'+o.companyId;
+    const hist=JSON.parse(localStorage.getItem(key)||'[]');
+    const hi=hist.findIndex(h=>h.id===id);
+    if(hi>=0){hist[hi].status=newStatus;localStorage.setItem(key,JSON.stringify(hist))}
+  }
+  markAdminDirty();
+  closeModal('order-detail-modal');
+  renderAdminOrders(document.getElementById('main-content'));
+  showToast('✅ Statut mis à jour : '+STATUS_LABELS[newStatus]);
+}
+
+function deleteOrderConfirm(id){
+  showWarn('Supprimer la commande '+id+' ?',()=>{
+    const idx=orders.findIndex(o=>o.id===id);
+    if(idx>=0){orders.splice(idx,1);markAdminDirty()}
+    closeModal('order-detail-modal');
+    renderAdminOrders(document.getElementById('main-content'));
+    showToast('✅ Commande supprimée');
+  });
+}
+
+function notifyDiscordStatus(order){fetch('/api/discord/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({orderId:order.id,status:order.status})}).catch(()=>{});}
+
+function exportAllCSV(){
+  const h='ID,Entreprise,Tel,Date,Horaire,Produits,Total,Statut\n';
+  const rows=orders.map(o=>[o.id,'"'+(o.company||'')+'"',o.tel,o.date,o.horaire,'"'+(o.products||[]).map(p=>p.qty+'x'+p.name).join(', ')+'"',o.total,o.status].join(',')).join('\n');
+  const blob=new Blob([h+rows],{type:'text/csv;charset=utf-8;'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='commandes_ltd.csv';a.click();
+}
+
+function renderAdminInfo(container){
+  const lastSave=Number(localStorage.getItem('ltd_last_remote_save')||0);
+  container.innerHTML=`
+    <div class="system-card">
+      <div class="system-card-head">
+        <div><h3 style="margin:0 0 .2rem">☁ Sauvegarde & sécurité</h3><div style="font-size:11px;color:var(--text-muted)">Diagnostic du stockage, sauvegarde de secours et restauration.</div></div>
+        <div class="system-actions">
+          <button class="btn-outline btn-sm" onclick="showSystemStatus()">Tester le stockage</button>
+          <button class="btn-outline btn-sm" onclick="exportBackupJson()">⬇ Exporter backup</button>
+          <button class="btn-outline btn-sm" onclick="openBackupImport()">⬆ Importer backup</button>
+        </div>
+      </div>
+      <div class="system-status">
+        <div><span class="system-dot ${adminDirty?'bad':'ok'}"></span>${adminDirty?'Des modifications attendent une sauvegarde distante.':'Aucune modification admin en attente.'}</div>
+        <div>Dernière sauvegarde distante depuis ce navigateur : <strong>${lastSave?new Date(lastSave).toLocaleString('fr-FR'):'Aucune'}</strong></div>
+        <div>Conseil : exportez ponctuellement un backup JSON après de grosses modifications.</div>
+      </div>
+    </div>
+    <div class="admin-section-head"><div><h2>Informations entreprises</h2><p style="color:var(--text-muted);font-size:11px">Retrouve ici les informations saisies par chaque entreprise, notamment les IBAN.</p></div></div>
+    <div class="companies-grid">${companies.map(co=>`<div class="enterprise-card"><div class="enterprise-card-title">🏢 ${co.name}</div><div class="info-grid"><div class="info-box"><span>IBAN</span><strong>${co.iban||'Non renseigné'}</strong></div><div class="info-box"><span>Statut</span><strong>${co.active===false?'Suspendu':'Actif'}</strong></div><div class="info-box"><span>Contacts</span><strong>${(co.contacts||[]).length}</strong></div><div class="info-box"><span>Note</span><strong>${co.note||'—'}</strong></div></div><div style="margin-top:.8rem"><button class="btn-outline btn-sm" onclick="openCompanyInfo(${companies.indexOf(co)})">Voir le détail</button></div></div>`).join('')}</div>`;
+}
+
+// ═══ ADMIN PRODUCTS ═══
+function renderAdminProducts(container){
+  const canEdit=curAdmRole==='Patron';
+  container.innerHTML=`
+    ${canEdit?`<div class="add-form-box">
+      <h3>Ajouter un produit</h3>
+      <div class="add-form-row">
+        <div><label class="form-label">Icône</label><input type="text" class="form-input" id="np-icon" placeholder="🌿" style="font-size:1.1rem;text-align:center"></div>
+        <div><label class="form-label">Nom</label><input type="text" class="form-input" id="np-name" placeholder="Nom du produit"></div>
+        <div><label class="form-label">Poids</label><input type="text" class="form-input" id="np-unit" placeholder="0.5"></div>
+        <div><label class="form-label">Prix $</label><input type="number" class="form-input" id="np-price" placeholder="10" min="0"></div>
+        <div><label class="form-label">Catégorie</label><select class="form-input" id="np-cat">${categories.map(c=>`<option value="${c.name}">${c.icon} ${c.name}</option>`).join('')}<option value="__new">＋ Nouvelle catégorie</option></select></div>
+        <div style="margin-top:auto"><button class="btn btn-sm" onclick="addProduct()">+ Ajouter</button></div>
+      </div>
+    </div>`:''}
+    <div class="category-manager">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
+        <div><h3 style="margin-bottom:.2rem">Catégories</h3><div style="font-size:11px;color:var(--text-muted)">Crée, renomme ou supprime les catégories du catalogue.</div></div>
+        ${canEdit?'<button class="btn btn-sm" onclick="addCategory()">＋ Ajouter une catégorie</button>':''}
+      </div>
+      <div class="category-list">${categories.map((c,i)=>`<div class="category-chip"><span>${c.icon} ${c.name}</span>${canEdit?`<button onclick="editCategory(${i})">✎</button><button onclick="deleteCategory(${i})">×</button>`:''}</div>`).join('')}</div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:1rem;gap:.5rem">
+      ${canEdit?'<button class="btn-danger btn-sm" onclick="resetCatalogue()">🔄 Réinitialiser</button>':''}
+    </div>
+    <div class="prod-grid" id="prod-admin-grid"></div>`;
+  renderProdGrid(canEdit);
+}
+
+function renderProdGrid(canEdit){
+  const canE=canEdit??curAdmRole==='Patron';
+  document.getElementById('prod-admin-grid').innerHTML=products.map((p,i)=>`
+    <div class="prod-card">
+      <div class="prod-card-icon">${p.icon}</div>
+      <div class="prod-card-name">${p.name}</div>
+      <div class="prod-card-info">${p.unit} kg/u · ${p.cat||'—'}</div>
+      <div class="prod-card-price">$${p.price}</div>
+      ${p.destockage?'<span class="sbadge sbadge-cancel" style="margin-bottom:.5rem">Déstockage</span>':''}
+      ${canE?`<div class="prod-card-actions">
+        <button class="btn-outline btn-sm" onclick="editProd(${i})">Modifier</button>
+        <button class="btn-outline btn-sm" onclick="toggleDestockage(${i})">${p.destockage?'Normal':'Déstock'}</button>
+        <button class="btn-danger btn-sm" onclick="deleteProd(${i})">✕</button>
+      </div>`:''}
+    </div>`).join('');
+}
+
+function addProduct(){
+  const icon=document.getElementById('np-icon').value.trim()||'📦';
+  const name=document.getElementById('np-name').value.trim();
+  const unit=document.getElementById('np-unit').value.trim();
+  const price=parseFloat(document.getElementById('np-price').value);
+  let cat=document.getElementById('np-cat').value;
+  if(cat==='__new'){cat=prompt('Nom de la nouvelle catégorie :','Nouvelle catégorie')?.trim()||''; if(!cat)return; if(!categories.find(c=>c.name===cat))categories.push({name:cat,icon:prompt('Icône de la catégorie :','📦')||'📦'});}
+  if(!name||isNaN(price)||!cat){showToast('⚠ Nom, prix et catégorie requis');return}
+  products.push({id:'prod_'+Date.now(),icon,name,unit:unit||'0.5',price,cat});
+  markAdminDirty();['np-icon','np-name','np-unit','np-price'].forEach(id=>document.getElementById(id).value='');
+  renderAdminProducts(document.getElementById('main-content'));showToast('✅ Produit ajouté');
+}
+
+function editProd(i){
+  const p=products[i];
+  const name=prompt('Nom :',p.name);if(name===null)return;
+  const price=parseFloat(prompt('Prix ($) :',p.price));if(isNaN(price))return;
+  const icon=prompt('Icône :',p.icon)||p.icon;
+  products[i]={...p,name,price,icon};
+  markAdminDirty();renderProdGrid(true);showToast('✅ Produit modifié');
+}
+
+function toggleDestockage(i){
+  products[i].destockage=!products[i].destockage;
+  markAdminDirty();renderProdGrid(true);
+  showToast(products[i].destockage?'🏷 Déstockage activé':'✅ Déstockage désactivé');
+}
+
+function deleteProd(i){
+  showWarn('Supprimer "'+products[i].name+'" ?',()=>{
+    products.splice(i,1);markAdminDirty();renderProdGrid(true);showToast('✅ Produit supprimé');
+  });
+}
+
+function addCategory(){
+  const name=prompt('Nom de la catégorie :','Nouvelle catégorie')?.trim(); if(!name)return;
+  if(categories.some(c=>c.name.toLowerCase()===name.toLowerCase())){showToast('⚠ Catégorie déjà existante');return}
+  const icon=prompt('Icône :','📦')||'📦'; categories.push({name,icon}); markAdminDirty(); renderAdminProducts(document.getElementById('main-content')); showToast('✅ Catégorie créée');
+}
+function editCategory(i){
+  const c=categories[i]; const name=prompt('Nom :',c.name)?.trim(); if(!name)return; const icon=prompt('Icône :',c.icon)||c.icon; const old=c.name; categories[i]={name,icon}; products.forEach(p=>{if(p.cat===old)p.cat=name}); markAdminDirty(); renderAdminProducts(document.getElementById('main-content')); showToast('✅ Catégorie modifiée');
+}
+function deleteCategory(i){
+  const c=categories[i]; if(products.some(p=>p.cat===c.name)){showToast('⚠ Cette catégorie contient encore des produits');return}
+  showWarn('Supprimer la catégorie « '+c.name+' » ?',()=>{categories.splice(i,1);markAdminDirty();renderAdminProducts(document.getElementById('main-content'));showToast('✅ Catégorie supprimée')});
+}
+
+function resetCatalogue(){
+  showWarn('Réinitialiser tout le catalogue aux prix par défaut ?',()=>{
+    products=applySmartProductIcons(defaultProducts());categories=[...new Set(products.map(p=>p.cat).filter(Boolean))].map(name=>({name,icon:(CAT_ICONS[name]||'📦')}));markAdminDirty();renderAdminProducts(document.getElementById('main-content'));showToast('✅ Catalogue réinitialisé');
+  });
+}
+
+// ═══ ADMIN COMPANIES ═══
+function renderAdminCompanies(container){
+  const canEdit=curAdmRole==='Patron';
+  container.innerHTML=`
+    ${canEdit?`<div class="add-form-box">
+      <h3>Créer un compte entreprise</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:.65rem;align-items:end">
+        <div><label class="form-label">Nom</label><input type="text" class="form-input" id="nco-name" placeholder="Sandy Corp..."></div>
+        <div><label class="form-label">Note</label><input type="text" class="form-input" id="nco-note" placeholder="Optionnel..."></div>
+        <div style="margin-top:auto"><button class="btn btn-sm" onclick="createCompany()">+ Créer</button></div>
+      </div>
+    </div>`:''}
+    <div class="companies-grid" id="co-grid"></div>`;
+  renderCoGrid(canEdit);
+}
+
+function renderCoGrid(canEdit){
+  const canE=canEdit??curAdmRole==='Patron';
+  const grid=document.getElementById('co-grid');
+  if(!companies.length){grid.innerHTML='<div class="empty"><span class="empty-icon">🏢</span>Aucune entreprise.</div>';return}
+  grid.innerHTML=companies.map((co,i)=>`
+    <div class="co-card ${co.active!==false?'co-active':''}">
+      <div class="co-card-name">🏢 ${co.name} ${co.permanent?'<span style="font-size:9px;color:var(--green);border:1px solid rgba(46,125,79,.3);padding:1px 6px;border-radius:20px">Permanent</span>':''}
+        ${co.active===false?'<span style="font-size:9px;color:var(--red);border:1px solid rgba(139,26,26,.3);padding:1px 6px;border-radius:20px">Suspendu</span>':''}
+      </div>
+      <div class="co-card-meta">${co.note||'—'} · ${co.createdAt||''}</div>
+      <div class="co-card-pw">MDP : <span>${co.password}</span>
+        <button onclick="navigator.clipboard.writeText('${co.password}');showToast('✓ Copié !')" style="background:none;border:none;cursor:pointer;color:var(--brown-mid);font-size:11px">📋</button>
+      </div>
+      ${canE?`<div class="co-card-actions">
+        <button class="btn-outline btn-sm" onclick="openPriceModal(${i})">💰 Prix perso</button>
+        <button class="btn-outline btn-sm" onclick="openCompanyInfo(${i})">ℹ Infos</button>
+        <button class="btn-outline btn-sm" onclick="openCompanySettings(${i})">⚙ Réglages</button>
+      </div>`:''}
+    </div>`).join('');
+}
+
+function createCompany(){
+  const name=document.getElementById('nco-name').value.trim();
+  const note=document.getElementById('nco-note').value.trim();
+  if(!name){showToast('⚠ Entrez un nom');return}
+  if(companies.find(c=>c.name.toLowerCase()===name.toLowerCase())){showToast('⚠ Entreprise déjà existante');return}
+  const pw=genPW();
+  companies.push({id:genId(),name,password:pw,note,customPrices:{},active:true,createdAt:new Date().toLocaleDateString('fr-FR'),contacts:[],iban:''});
+  markAdminDirty();
+  document.getElementById('nco-name').value='';document.getElementById('nco-note').value='';
+  renderCoGrid(true);
+  navigator.clipboard.writeText(pw).catch(()=>{});
+  showToast('✅ Compte créé ! MDP: '+pw,4000);
+}
+
+function resetCoMdp(i){
+  const pw=genPW();companies[i].password=pw;markAdminDirty();renderCoGrid(true);
+  navigator.clipboard.writeText(pw).catch(()=>{});
+  showToast('✅ Nouveau mdp: '+pw,4000);
+}
+
+function toggleCoActive(i){
+  const co=companies[i];
+  const isSuspended=co.active===false;
+  const action=isSuspended?'Réactiver':'Suspendre';
+  showWarn(action+' l’entreprise « '+co.name+' » ?',()=>{
+    companies[i].active=isSuspended;
+    markAdminDirty();
+    renderCoGrid(true);
+    showToast(isSuspended?'✅ Entreprise réactivée':'⏸ Entreprise suspendue');
+  },action);
+}
+
+function deleteCo(i){
+  showWarn('Supprimer "'+companies[i].name+'" ?',()=>{
+    companies.splice(i,1);markAdminDirty();renderCoGrid(true);showToast('✅ Entreprise supprimée');
+  });
+}
+
+function openCompanyInfo(i){
+  const co=companies[i]; document.getElementById('company-info-title').textContent='Infos — '+co.name;
+  document.getElementById('company-info-body').innerHTML=`<div class="info-grid">${[['Entreprise',co.name],['IBAN',co.iban||'Non renseigné'],['Contacts',(co.contacts||[]).length+' contact(s)'],['Création',co.createdAt||'—'],['Statut',co.active===false?'Suspendu':'Actif'],['Note',co.note||'—']].map(([k,v])=>`<div class="info-box"><span>${k}</span><strong>${v}</strong></div>`).join('')}</div><div style="margin-top:1rem"><h3>Contacts</h3>${(co.contacts||[]).map(c=>`<div class="detail-row"><span class="detail-key">${c.name}</span><span class="detail-val">${c.phone}${c.note?' · '+c.note:''}</span></div>`).join('')||'<div class="empty">Aucun contact renseigné.</div>'}</div>`;
+  document.getElementById('company-info-modal').classList.add('open');
+}
+function openCompanySettings(i){
+  const co=companies[i]; document.getElementById('company-settings-title').textContent='Réglages — '+co.name;
+  document.getElementById('company-settings-body').innerHTML=`<div class="settings-list"><button class="settings-action" onclick="viewAsCompany(${i})"><span>👁</span><div><b>Voir comme l’entreprise</b><small>Ouvrir exactement son espace client.</small></div></button><button class="settings-action" onclick="resetCoMdp(${i})"><span>🔑</span><div><b>Réinitialiser le mot de passe</b><small>Générer un nouveau mot de passe.</small></div></button><button class="settings-action" onclick="closeModal('company-settings-modal');toggleCoActive(${i})"><span>${co.active===false?'▶':'⏸'}</span><div><b>${co.active===false?'Réactiver':'Suspendre'} le compte</b><small>${co.active===false?'Autoriser à nouveau la connexion.':'Bloquer temporairement la connexion.'}</small></div></button>${!co.permanent?`<button class="settings-action danger" onclick="deleteCo(${i});closeModal('company-settings-modal')"><span>🗑</span><div><b>Supprimer le compte</b><small>Supprimer définitivement l’entreprise.</small></div></button>`:''}</div>`;
+  document.getElementById('company-settings-actions').innerHTML=`<button class="btn-outline" onclick="closeModal('company-settings-modal')">Fermer</button>`; document.getElementById('company-settings-modal').classList.add('open');
+}
+function viewAsCompany(i){const co=companies[i];closeModal('company-settings-modal');curCo={...co};mode='company';sessionStorage.setItem('ltd_session',JSON.stringify({mode:'company',coId:co.id,preview:true}));launchApp();showToast('👁 Aperçu de '+co.name)}
+
+// ═══ PRICE MODAL ═══
+function openPriceModal(i){
+  editCoIdx=i;const co=companies[i];
+  document.getElementById('pm-title').textContent='Prix — '+co.name;
+  document.getElementById('price-rows').innerHTML=products.map(p=>{
+    const custom=co.customPrices?.[p.id]!==undefined?co.customPrices[p.id]:'';
+    const hasC=custom!=='';
+    return `<div class="price-row">
+      <div style="font-size:11px;color:var(--text-mid);font-weight:600">${p.icon} ${p.name}</div>
+      <div style="text-align:center;font-size:11px;color:var(--text-muted);font-weight:700">$${p.price}</div>
+      <div><input class="price-input" type="number" min="0" id="cp-${p.id}" value="${custom}" placeholder="${p.price}"></div>
+      <div style="text-align:center;font-size:9px;font-weight:700;color:${hasC?'var(--blue)':'var(--text-muted)'}" id="cpb-${p.id}">${hasC?'Perso':'Standard'}</div>
+    </div>`;
+  }).join('');
+  products.forEach(p=>{
+    const inp=document.getElementById('cp-'+p.id);
+    if(inp)inp.addEventListener('input',()=>{
+      const b=document.getElementById('cpb-'+p.id);
+      if(b){const isP=inp.value!==''&&inp.value!=p.price.toString();b.textContent=isP?'Perso':'Standard';b.style.color=isP?'var(--blue)':'var(--text-muted)'}
+    });
+  });
+  document.getElementById('price-modal').classList.add('open');
+}
+
+function savePrices(){
+  if(editCoIdx===null)return;
+  const cp={};
+  products.forEach(p=>{const v=document.getElementById('cp-'+p.id)?.value;if(v!==''&&v!==undefined&&!isNaN(parseFloat(v)))cp[p.id]=parseFloat(v)});
+  companies[editCoIdx].customPrices=cp;markAdminDirty();closeModal('price-modal');renderCoGrid(true);showToast('💾 Prix modifiés — sauvegarde automatique en cours');
+}
+
+// ═══ SYNC ═══
+let syncInterval=null;
+async function syncFromServer(){
+  if(mode==='admin'&&adminDirty)return;
+  try{
+    const r=await fetch('/api/data',{cache:'no-store'});
+    if(!r.ok)return;
+    const d=await r.json();
+    const serverTs=Number(d.updatedAt||d._updatedAt||0)||0;
+    const localTs=Number(dataUpdatedAt||0)||0;
+
+    // Ne jamais écraser une modification locale récente avec une ancienne copie serveur.
+    if(localTs>serverTs){
+      if(!adminDirty) pushToServer({silent:true,keepTimestamp:true});
+      return;
+    }
+    if(serverTs<=localTs)return;
+
+    applyState(d);
+    DEFAULT_COMPANIES.forEach(def=>{if(!companies.find(c=>c.id===def.id))companies.push({...def})});
+    if(!products.length)products=applySmartProductIcons(defaultProducts());
+    if(!categories.length)categories=[...new Set(products.map(p=>p.cat).filter(Boolean))].map(name=>({name,icon:(CAT_ICONS[name]||'📦')}));
+    saveFullLocal();
+
+    if(mode==='company'){
+      if(curCo){const fresh=companies.find(c=>c.id===curCo.id);if(fresh)curCo={...fresh}}
+      const active=document.querySelector('.nav-item.active')?.id||'';
+      if(active==='nav-hist') renderHistory(document.getElementById('main-content'));
+      if(active==='nav-cmd') renderCatalogue(document.getElementById('main-content'));
+    } else if(mode==='admin'){
+      const active=document.querySelector('.nav-item.active')?.id||'';
+      if(active==='nav-aorders') renderAdminOrders(document.getElementById('main-content'));
+      if(active==='nav-aprod') renderAdminProducts(document.getElementById('main-content'));
+      if(active==='nav-aco') renderAdminCompanies(document.getElementById('main-content'));
+    }
+  }catch(e){}
+}
+function startSync(){if(syncInterval)return;syncInterval=setInterval(syncFromServer,6000)}
+window.addEventListener('beforeunload',e=>{if(mode==='admin'&&adminDirty){e.preventDefault();e.returnValue=''}});
+
+// ═══ INIT ═══
+(async function(){
+  await loadFromServer();
+  // Session restore
+  const sess=sessionStorage.getItem('ltd_session');
+  if(sess){
+    try{
+      const s=JSON.parse(sess);
+      if(s.mode==='admin'&&ADMIN_ACCS[Object.keys(ADMIN_ACCS).find(k=>ADMIN_ACCS[k].role===s.role)]){
+        curAdmRole=s.role;mode='admin';launchApp();
+      }else if(s.mode==='company'&&s.coId){
+        const co=companies.find(c=>c.id===s.coId&&c.active!==false);
+        if(co){curCo={...co};mode='company';launchApp();}
+      }
+    }catch(e){}
+  }
+  document.getElementById('co-date')&&(document.getElementById('co-date').min=new Date().toISOString().split('T')[0]);
+  startSync();
+})();
+</script>
+</body>
+</html>
++(o.total||0).toLocaleString()],['Livreur / responsable',o.deliveredBy||o.assignedTo||'—'],['Statut actuel',STATUS_LABELS[o.status]||o.status]
+    ].map(([k,v])=>`<div class="detail-row"><span class="detail-key">${k}</span><span class="detail-val">${v||'—'}</span></div>`).join('')}
+    <div style="margin-top:1rem">
+      <label class="form-label">Changer le statut</label>
+      <select class="status-select" id="odm-status-sel">
+        ${['pending','validated','ready','done','cancel'].map(s=>`<option value="${s}" ${o.status===s?'selected':''}>${STATUS_LABELS[s]}</option>`).join('')}
+      </select>
+    </div>`;
+  document.getElementById('odm-actions').innerHTML=`
+    <button class="btn" onclick="applyOrderStatus('${o.id}')">✓ Appliquer le statut</button>
+    <button class="btn-danger" onclick="deleteOrderConfirm('${o.id}')">🗑 Supprimer</button>
+    <button class="btn-outline" onclick="closeModal('order-detail-modal')">Fermer</button>`;
+  document.getElementById('order-detail-modal').classList.add('open');
+}
+
+function applyOrderStatus(id){
+  const sel=document.getElementById('odm-status-sel');
+  if(!sel)return;
+  const newStatus=sel.value;
+  const idx=orders.findIndex(o=>o.id===id);
+  if(idx<0)return;
+  const oldStatus=orders[idx].status;
+  orders[idx].status=newStatus;
+  orders[idx].statusHistory=orders[idx].statusHistory||[];
+  orders[idx].statusHistory.push({status:newStatus,date:new Date().toLocaleDateString('fr-FR'),time:new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})});
+  // Sync to company history
+  const o=orders[idx];
+  if(o.companyId){
+    const key='ltd_hist_'+o.companyId;
+    const hist=JSON.parse(localStorage.getItem(key)||'[]');
+    const hi=hist.findIndex(h=>h.id===id);
+    if(hi>=0){hist[hi].status=newStatus;localStorage.setItem(key,JSON.stringify(hist))}
+  }
+  markAdminDirty();
+  closeModal('order-detail-modal');
+  renderAdminOrders(document.getElementById('main-content'));
+  showToast('✅ Statut mis à jour : '+STATUS_LABELS[newStatus]);
+}
+
+function deleteOrderConfirm(id){
+  showWarn('Supprimer la commande '+id+' ?',()=>{
+    const idx=orders.findIndex(o=>o.id===id);
+    if(idx>=0){orders.splice(idx,1);markAdminDirty()}
+    closeModal('order-detail-modal');
+    renderAdminOrders(document.getElementById('main-content'));
+    showToast('✅ Commande supprimée');
+  });
+}
+
+function notifyDiscordStatus(order){fetch('/api/discord/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({orderId:order.id,status:order.status})}).catch(()=>{});}
+
+function exportAllCSV(){
+  const h='ID,Entreprise,Tel,Date,Horaire,Produits,Total,Statut\n';
+  const rows=orders.map(o=>[o.id,'"'+(o.company||'')+'"',o.tel,o.date,o.horaire,'"'+(o.products||[]).map(p=>p.qty+'x'+p.name).join(', ')+'"',o.total,o.status].join(',')).join('\n');
+  const blob=new Blob([h+rows],{type:'text/csv;charset=utf-8;'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='commandes_ltd.csv';a.click();
+}
+
+function renderAdminInfo(container){
+  const lastSave=Number(localStorage.getItem('ltd_last_remote_save')||0);
+  container.innerHTML=`
+    <div class="system-card">
+      <div class="system-card-head">
+        <div><h3 style="margin:0 0 .2rem">☁ Sauvegarde & sécurité</h3><div style="font-size:11px;color:var(--text-muted)">Diagnostic du stockage, sauvegarde de secours et restauration.</div></div>
+        <div class="system-actions">
+          <button class="btn-outline btn-sm" onclick="showSystemStatus()">Tester le stockage</button>
+          <button class="btn-outline btn-sm" onclick="exportBackupJson()">⬇ Exporter backup</button>
+          <button class="btn-outline btn-sm" onclick="openBackupImport()">⬆ Importer backup</button>
+        </div>
+      </div>
+      <div class="system-status">
+        <div><span class="system-dot ${adminDirty?'bad':'ok'}"></span>${adminDirty?'Des modifications attendent une sauvegarde distante.':'Aucune modification admin en attente.'}</div>
+        <div>Dernière sauvegarde distante depuis ce navigateur : <strong>${lastSave?new Date(lastSave).toLocaleString('fr-FR'):'Aucune'}</strong></div>
+        <div>Conseil : exportez ponctuellement un backup JSON après de grosses modifications.</div>
+      </div>
+    </div>
+    <div class="admin-section-head"><div><h2>Informations entreprises</h2><p style="color:var(--text-muted);font-size:11px">Retrouve ici les informations saisies par chaque entreprise, notamment les IBAN.</p></div></div>
+    <div class="companies-grid">${companies.map(co=>`<div class="enterprise-card"><div class="enterprise-card-title">🏢 ${co.name}</div><div class="info-grid"><div class="info-box"><span>IBAN</span><strong>${co.iban||'Non renseigné'}</strong></div><div class="info-box"><span>Statut</span><strong>${co.active===false?'Suspendu':'Actif'}</strong></div><div class="info-box"><span>Contacts</span><strong>${(co.contacts||[]).length}</strong></div><div class="info-box"><span>Note</span><strong>${co.note||'—'}</strong></div></div><div style="margin-top:.8rem"><button class="btn-outline btn-sm" onclick="openCompanyInfo(${companies.indexOf(co)})">Voir le détail</button></div></div>`).join('')}</div>`;
+}
+
+// ═══ ADMIN PRODUCTS ═══
+function renderAdminProducts(container){
+  const canEdit=curAdmRole==='Patron';
+  container.innerHTML=`
+    ${canEdit?`<div class="add-form-box">
+      <h3>Ajouter un produit</h3>
+      <div class="add-form-row">
+        <div><label class="form-label">Icône</label><input type="text" class="form-input" id="np-icon" placeholder="🌿" style="font-size:1.1rem;text-align:center"></div>
+        <div><label class="form-label">Nom</label><input type="text" class="form-input" id="np-name" placeholder="Nom du produit"></div>
+        <div><label class="form-label">Poids</label><input type="text" class="form-input" id="np-unit" placeholder="0.5"></div>
+        <div><label class="form-label">Prix $</label><input type="number" class="form-input" id="np-price" placeholder="10" min="0"></div>
+        <div><label class="form-label">Catégorie</label><select class="form-input" id="np-cat">${categories.map(c=>`<option value="${c.name}">${c.icon} ${c.name}</option>`).join('')}<option value="__new">＋ Nouvelle catégorie</option></select></div>
+        <div style="margin-top:auto"><button class="btn btn-sm" onclick="addProduct()">+ Ajouter</button></div>
+      </div>
+    </div>`:''}
+    <div class="category-manager">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
+        <div><h3 style="margin-bottom:.2rem">Catégories</h3><div style="font-size:11px;color:var(--text-muted)">Crée, renomme ou supprime les catégories du catalogue.</div></div>
+        ${canEdit?'<button class="btn btn-sm" onclick="addCategory()">＋ Ajouter une catégorie</button>':''}
+      </div>
+      <div class="category-list">${categories.map((c,i)=>`<div class="category-chip"><span>${c.icon} ${c.name}</span>${canEdit?`<button onclick="editCategory(${i})">✎</button><button onclick="deleteCategory(${i})">×</button>`:''}</div>`).join('')}</div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:1rem;gap:.5rem">
+      ${canEdit?'<button class="btn-danger btn-sm" onclick="resetCatalogue()">🔄 Réinitialiser</button>':''}
+    </div>
+    <div class="prod-grid" id="prod-admin-grid"></div>`;
+  renderProdGrid(canEdit);
+}
+
+function renderProdGrid(canEdit){
+  const canE=canEdit??curAdmRole==='Patron';
+  document.getElementById('prod-admin-grid').innerHTML=products.map((p,i)=>`
+    <div class="prod-card">
+      <div class="prod-card-icon">${p.icon}</div>
+      <div class="prod-card-name">${p.name}</div>
+      <div class="prod-card-info">${p.unit} kg/u · ${p.cat||'—'}</div>
+      <div class="prod-card-price">$${p.price}</div>
+      ${p.destockage?'<span class="sbadge sbadge-cancel" style="margin-bottom:.5rem">Déstockage</span>':''}
+      ${canE?`<div class="prod-card-actions">
+        <button class="btn-outline btn-sm" onclick="editProd(${i})">Modifier</button>
+        <button class="btn-outline btn-sm" onclick="toggleDestockage(${i})">${p.destockage?'Normal':'Déstock'}</button>
+        <button class="btn-danger btn-sm" onclick="deleteProd(${i})">✕</button>
+      </div>`:''}
+    </div>`).join('');
+}
+
+function addProduct(){
+  const icon=document.getElementById('np-icon').value.trim()||'📦';
+  const name=document.getElementById('np-name').value.trim();
+  const unit=document.getElementById('np-unit').value.trim();
+  const price=parseFloat(document.getElementById('np-price').value);
+  let cat=document.getElementById('np-cat').value;
+  if(cat==='__new'){cat=prompt('Nom de la nouvelle catégorie :','Nouvelle catégorie')?.trim()||''; if(!cat)return; if(!categories.find(c=>c.name===cat))categories.push({name:cat,icon:prompt('Icône de la catégorie :','📦')||'📦'});}
+  if(!name||isNaN(price)||!cat){showToast('⚠ Nom, prix et catégorie requis');return}
+  products.push({id:'prod_'+Date.now(),icon,name,unit:unit||'0.5',price,cat});
+  markAdminDirty();['np-icon','np-name','np-unit','np-price'].forEach(id=>document.getElementById(id).value='');
+  renderAdminProducts(document.getElementById('main-content'));showToast('✅ Produit ajouté');
+}
+
+function editProd(i){
+  const p=products[i];
+  const name=prompt('Nom :',p.name);if(name===null)return;
+  const price=parseFloat(prompt('Prix ($) :',p.price));if(isNaN(price))return;
+  const icon=prompt('Icône :',p.icon)||p.icon;
+  products[i]={...p,name,price,icon};
+  markAdminDirty();renderProdGrid(true);showToast('✅ Produit modifié');
+}
+
+function toggleDestockage(i){
+  products[i].destockage=!products[i].destockage;
+  markAdminDirty();renderProdGrid(true);
+  showToast(products[i].destockage?'🏷 Déstockage activé':'✅ Déstockage désactivé');
+}
+
+function deleteProd(i){
+  showWarn('Supprimer "'+products[i].name+'" ?',()=>{
+    products.splice(i,1);markAdminDirty();renderProdGrid(true);showToast('✅ Produit supprimé');
+  });
+}
+
+function addCategory(){
+  const name=prompt('Nom de la catégorie :','Nouvelle catégorie')?.trim(); if(!name)return;
+  if(categories.some(c=>c.name.toLowerCase()===name.toLowerCase())){showToast('⚠ Catégorie déjà existante');return}
+  const icon=prompt('Icône :','📦')||'📦'; categories.push({name,icon}); markAdminDirty(); renderAdminProducts(document.getElementById('main-content')); showToast('✅ Catégorie créée');
+}
+function editCategory(i){
+  const c=categories[i]; const name=prompt('Nom :',c.name)?.trim(); if(!name)return; const icon=prompt('Icône :',c.icon)||c.icon; const old=c.name; categories[i]={name,icon}; products.forEach(p=>{if(p.cat===old)p.cat=name}); markAdminDirty(); renderAdminProducts(document.getElementById('main-content')); showToast('✅ Catégorie modifiée');
+}
+function deleteCategory(i){
+  const c=categories[i]; if(products.some(p=>p.cat===c.name)){showToast('⚠ Cette catégorie contient encore des produits');return}
+  showWarn('Supprimer la catégorie « '+c.name+' » ?',()=>{categories.splice(i,1);markAdminDirty();renderAdminProducts(document.getElementById('main-content'));showToast('✅ Catégorie supprimée')});
+}
+
+function resetCatalogue(){
+  showWarn('Réinitialiser tout le catalogue aux prix par défaut ?',()=>{
+    products=applySmartProductIcons(defaultProducts());categories=[...new Set(products.map(p=>p.cat).filter(Boolean))].map(name=>({name,icon:(CAT_ICONS[name]||'📦')}));markAdminDirty();renderAdminProducts(document.getElementById('main-content'));showToast('✅ Catalogue réinitialisé');
+  });
+}
+
+// ═══ ADMIN COMPANIES ═══
+function renderAdminCompanies(container){
+  const canEdit=curAdmRole==='Patron';
+  container.innerHTML=`
+    ${canEdit?`<div class="add-form-box">
+      <h3>Créer un compte entreprise</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:.65rem;align-items:end">
+        <div><label class="form-label">Nom</label><input type="text" class="form-input" id="nco-name" placeholder="Sandy Corp..."></div>
+        <div><label class="form-label">Note</label><input type="text" class="form-input" id="nco-note" placeholder="Optionnel..."></div>
+        <div style="margin-top:auto"><button class="btn btn-sm" onclick="createCompany()">+ Créer</button></div>
+      </div>
+    </div>`:''}
+    <div class="companies-grid" id="co-grid"></div>`;
+  renderCoGrid(canEdit);
+}
+
+function renderCoGrid(canEdit){
+  const canE=canEdit??curAdmRole==='Patron';
+  const grid=document.getElementById('co-grid');
+  if(!companies.length){grid.innerHTML='<div class="empty"><span class="empty-icon">🏢</span>Aucune entreprise.</div>';return}
+  grid.innerHTML=companies.map((co,i)=>`
+    <div class="co-card ${co.active!==false?'co-active':''}">
+      <div class="co-card-name">🏢 ${co.name} ${co.permanent?'<span style="font-size:9px;color:var(--green);border:1px solid rgba(46,125,79,.3);padding:1px 6px;border-radius:20px">Permanent</span>':''}
+        ${co.active===false?'<span style="font-size:9px;color:var(--red);border:1px solid rgba(139,26,26,.3);padding:1px 6px;border-radius:20px">Suspendu</span>':''}
+      </div>
+      <div class="co-card-meta">${co.note||'—'} · ${co.createdAt||''}</div>
+      <div class="co-card-pw">MDP : <span>${co.password}</span>
+        <button onclick="navigator.clipboard.writeText('${co.password}');showToast('✓ Copié !')" style="background:none;border:none;cursor:pointer;color:var(--brown-mid);font-size:11px">📋</button>
+      </div>
+      ${canE?`<div class="co-card-actions">
+        <button class="btn-outline btn-sm" onclick="openPriceModal(${i})">💰 Prix perso</button>
+        <button class="btn-outline btn-sm" onclick="openCompanyInfo(${i})">ℹ Infos</button>
+        <button class="btn-outline btn-sm" onclick="openCompanySettings(${i})">⚙ Réglages</button>
+      </div>`:''}
+    </div>`).join('');
+}
+
+function createCompany(){
+  const name=document.getElementById('nco-name').value.trim();
+  const note=document.getElementById('nco-note').value.trim();
+  if(!name){showToast('⚠ Entrez un nom');return}
+  if(companies.find(c=>c.name.toLowerCase()===name.toLowerCase())){showToast('⚠ Entreprise déjà existante');return}
+  const pw=genPW();
+  companies.push({id:genId(),name,password:pw,note,customPrices:{},active:true,createdAt:new Date().toLocaleDateString('fr-FR'),contacts:[],iban:''});
+  markAdminDirty();
+  document.getElementById('nco-name').value='';document.getElementById('nco-note').value='';
+  renderCoGrid(true);
+  navigator.clipboard.writeText(pw).catch(()=>{});
+  showToast('✅ Compte créé ! MDP: '+pw,4000);
+}
+
+function resetCoMdp(i){
+  const pw=genPW();companies[i].password=pw;markAdminDirty();renderCoGrid(true);
+  navigator.clipboard.writeText(pw).catch(()=>{});
+  showToast('✅ Nouveau mdp: '+pw,4000);
+}
+
+function toggleCoActive(i){
+  const co=companies[i];
+  const isSuspended=co.active===false;
+  const action=isSuspended?'Réactiver':'Suspendre';
+  showWarn(action+' l’entreprise « '+co.name+' » ?',()=>{
+    companies[i].active=isSuspended;
+    markAdminDirty();
+    renderCoGrid(true);
+    showToast(isSuspended?'✅ Entreprise réactivée':'⏸ Entreprise suspendue');
+  },action);
+}
+
+function deleteCo(i){
+  showWarn('Supprimer "'+companies[i].name+'" ?',()=>{
+    companies.splice(i,1);markAdminDirty();renderCoGrid(true);showToast('✅ Entreprise supprimée');
+  });
+}
+
+function openCompanyInfo(i){
+  const co=companies[i]; document.getElementById('company-info-title').textContent='Infos — '+co.name;
+  document.getElementById('company-info-body').innerHTML=`<div class="info-grid">${[['Entreprise',co.name],['IBAN',co.iban||'Non renseigné'],['Contacts',(co.contacts||[]).length+' contact(s)'],['Création',co.createdAt||'—'],['Statut',co.active===false?'Suspendu':'Actif'],['Note',co.note||'—']].map(([k,v])=>`<div class="info-box"><span>${k}</span><strong>${v}</strong></div>`).join('')}</div><div style="margin-top:1rem"><h3>Contacts</h3>${(co.contacts||[]).map(c=>`<div class="detail-row"><span class="detail-key">${c.name}</span><span class="detail-val">${c.phone}${c.note?' · '+c.note:''}</span></div>`).join('')||'<div class="empty">Aucun contact renseigné.</div>'}</div>`;
+  document.getElementById('company-info-modal').classList.add('open');
+}
+function openCompanySettings(i){
+  const co=companies[i]; document.getElementById('company-settings-title').textContent='Réglages — '+co.name;
+  document.getElementById('company-settings-body').innerHTML=`<div class="settings-list"><button class="settings-action" onclick="viewAsCompany(${i})"><span>👁</span><div><b>Voir comme l’entreprise</b><small>Ouvrir exactement son espace client.</small></div></button><button class="settings-action" onclick="resetCoMdp(${i})"><span>🔑</span><div><b>Réinitialiser le mot de passe</b><small>Générer un nouveau mot de passe.</small></div></button><button class="settings-action" onclick="closeModal('company-settings-modal');toggleCoActive(${i})"><span>${co.active===false?'▶':'⏸'}</span><div><b>${co.active===false?'Réactiver':'Suspendre'} le compte</b><small>${co.active===false?'Autoriser à nouveau la connexion.':'Bloquer temporairement la connexion.'}</small></div></button>${!co.permanent?`<button class="settings-action danger" onclick="deleteCo(${i});closeModal('company-settings-modal')"><span>🗑</span><div><b>Supprimer le compte</b><small>Supprimer définitivement l’entreprise.</small></div></button>`:''}</div>`;
+  document.getElementById('company-settings-actions').innerHTML=`<button class="btn-outline" onclick="closeModal('company-settings-modal')">Fermer</button>`; document.getElementById('company-settings-modal').classList.add('open');
+}
+function viewAsCompany(i){const co=companies[i];closeModal('company-settings-modal');curCo={...co};mode='company';sessionStorage.setItem('ltd_session',JSON.stringify({mode:'company',coId:co.id,preview:true}));launchApp();showToast('👁 Aperçu de '+co.name)}
+
+// ═══ PRICE MODAL ═══
+function openPriceModal(i){
+  editCoIdx=i;const co=companies[i];
+  document.getElementById('pm-title').textContent='Prix — '+co.name;
+  document.getElementById('price-rows').innerHTML=products.map(p=>{
+    const custom=co.customPrices?.[p.id]!==undefined?co.customPrices[p.id]:'';
+    const hasC=custom!=='';
+    return `<div class="price-row">
+      <div style="font-size:11px;color:var(--text-mid);font-weight:600">${p.icon} ${p.name}</div>
+      <div style="text-align:center;font-size:11px;color:var(--text-muted);font-weight:700">$${p.price}</div>
+      <div><input class="price-input" type="number" min="0" id="cp-${p.id}" value="${custom}" placeholder="${p.price}"></div>
+      <div style="text-align:center;font-size:9px;font-weight:700;color:${hasC?'var(--blue)':'var(--text-muted)'}" id="cpb-${p.id}">${hasC?'Perso':'Standard'}</div>
+    </div>`;
+  }).join('');
+  products.forEach(p=>{
+    const inp=document.getElementById('cp-'+p.id);
+    if(inp)inp.addEventListener('input',()=>{
+      const b=document.getElementById('cpb-'+p.id);
+      if(b){const isP=inp.value!==''&&inp.value!=p.price.toString();b.textContent=isP?'Perso':'Standard';b.style.color=isP?'var(--blue)':'var(--text-muted)'}
+    });
+  });
+  document.getElementById('price-modal').classList.add('open');
+}
+
+function savePrices(){
+  if(editCoIdx===null)return;
+  const cp={};
+  products.forEach(p=>{const v=document.getElementById('cp-'+p.id)?.value;if(v!==''&&v!==undefined&&!isNaN(parseFloat(v)))cp[p.id]=parseFloat(v)});
+  companies[editCoIdx].customPrices=cp;markAdminDirty();closeModal('price-modal');renderCoGrid(true);showToast('💾 Prix modifiés — sauvegarde automatique en cours');
+}
+
+// ═══ SYNC ═══
+let syncInterval=null;
+async function syncFromServer(){
+  if(mode==='admin'&&adminDirty)return;
+  try{
+    const r=await fetch('/api/data',{cache:'no-store'});
+    if(!r.ok)return;
+    const d=await r.json();
+    const serverTs=Number(d.updatedAt||d._updatedAt||0)||0;
+    const localTs=Number(dataUpdatedAt||0)||0;
+
+    // Ne jamais écraser une modification locale récente avec une ancienne copie serveur.
+    if(localTs>serverTs){
+      if(!adminDirty) pushToServer({silent:true,keepTimestamp:true});
+      return;
+    }
+    if(serverTs<=localTs)return;
+
+    applyState(d);
+    DEFAULT_COMPANIES.forEach(def=>{if(!companies.find(c=>c.id===def.id))companies.push({...def})});
+    if(!products.length)products=applySmartProductIcons(defaultProducts());
+    if(!categories.length)categories=[...new Set(products.map(p=>p.cat).filter(Boolean))].map(name=>({name,icon:(CAT_ICONS[name]||'📦')}));
+    saveFullLocal();
+
+    if(mode==='company'){
+      if(curCo){const fresh=companies.find(c=>c.id===curCo.id);if(fresh)curCo={...fresh}}
+      const active=document.querySelector('.nav-item.active')?.id||'';
+      if(active==='nav-hist') renderHistory(document.getElementById('main-content'));
+      if(active==='nav-cmd') renderCatalogue(document.getElementById('main-content'));
+    } else if(mode==='admin'){
+      const active=document.querySelector('.nav-item.active')?.id||'';
+      if(active==='nav-aorders') renderAdminOrders(document.getElementById('main-content'));
+      if(active==='nav-aprod') renderAdminProducts(document.getElementById('main-content'));
+      if(active==='nav-aco') renderAdminCompanies(document.getElementById('main-content'));
+    }
+  }catch(e){}
+}
+function startSync(){if(syncInterval)return;syncInterval=setInterval(syncFromServer,6000)}
+window.addEventListener('beforeunload',e=>{if(mode==='admin'&&adminDirty){e.preventDefault();e.returnValue=''}});
+
+// ═══ INIT ═══
+(async function(){
+  await loadFromServer();
+  // Session restore
+  const sess=sessionStorage.getItem('ltd_session');
+  if(sess){
+    try{
+      const s=JSON.parse(sess);
+      if(s.mode==='admin'&&ADMIN_ACCS[Object.keys(ADMIN_ACCS).find(k=>ADMIN_ACCS[k].role===s.role)]){
+        curAdmRole=s.role;mode='admin';launchApp();
+      }else if(s.mode==='company'&&s.coId){
+        const co=companies.find(c=>c.id===s.coId&&c.active!==false);
+        if(co){curCo={...co};mode='company';launchApp();}
+      }
+    }catch(e){}
+  }
+  document.getElementById('co-date')&&(document.getElementById('co-date').min=new Date().toISOString().split('T')[0]);
+  startSync();
+})();
+</script>
+</body>
+</html>
++Math.round(Number(n||0)).toLocaleString('fr-FR')}
+function fmtRange(a,b){const e=new Date(b);e.setDate(e.getDate()-1);return a.toLocaleDateString('fr-FR')+' → '+e.toLocaleDateString('fr-FR')}
+function currentPeriodData(){
+  const now=new Date(), ws=mondayStart(now), we=new Date(ws);we.setDate(we.getDate()+7);
+  const pws=new Date(ws);pws.setDate(pws.getDate()-7), pwe=new Date(ws);
+  const ms=monthStartDate(now), me=new Date(ms.getFullYear(),ms.getMonth()+1,1);
+  const all=activeOrders();
+  return {ws,we,pws,pwe,ms,me,week:all.filter(o=>inRange(o,ws,we)),prevWeek:all.filter(o=>inRange(o,pws,pwe)),month:all.filter(o=>inRange(o,ms,me))};
+}
+function ensureWeeklyReport(){
+  const now=mondayStart(new Date()), end=new Date(now), start=new Date(now);start.setDate(start.getDate()-7);
+  const key=start.toISOString().slice(0,10);
+  if(weeklyReports.some(r=>r.key===key))return;
+  const list=activeOrders().filter(o=>inRange(o,start,end));
+  if(!list.length)return;
+  const st=statsFor(list),pr=productRanking(list),cr=companyRanking(list),lr=courierRanking(list);
+  weeklyReports.push({key,range:fmtRange(start,end),ca:st.ca,orders:st.count,avg:st.avg,bestProduct:pr[0]?.name||'—',bestCompany:cr[0]?.name||'—',bestCourier:lr[0]?.name||'—',createdAt:Date.now()});
+  markAdminDirty();
+}
+function savePerformanceGoals(){
+  performanceSettings.weeklyCA=Math.max(0,Number(document.getElementById('goal-weekly-ca')?.value||0));
+  performanceSettings.monthlyCA=Math.max(0,Number(document.getElementById('goal-monthly-ca')?.value||0));
+  markAdminDirty();renderPerformance(document.getElementById('main-content'));showToast('✅ Objectifs CA sauvegardés');
+}
+function saveProductGoal(){
+  const p=document.getElementById('goal-product')?.value;
+  const target=Math.max(0,Number(document.getElementById('goal-product-target')?.value||0));
+  if(!p||!target){showToast('⚠ Choisis un produit et un objectif');return}
+  performanceSettings.productGoals[p]=target;markAdminDirty();renderPerformance(document.getElementById('main-content'));showToast('✅ Objectif produit sauvegardé');
+}
+function removeProductGoal(name){delete performanceSettings.productGoals[name];markAdminDirty();renderPerformance(document.getElementById('main-content'))}
+function exportAccountingCSV(){
+  const p=currentPeriodData(), list=p.month;
+  const h=['ID','Entreprise','Date','Produits','Total','Statut','Livreur'];
+  const rows=list.map(o=>[o.id,o.company||'',o.createdAt||o.date||'',(o.products||[]).map(x=>x.qty+'x '+x.name).join(' | '),Number(o.total||0),o.status||'',o.deliveredBy||o.assignedTo||'']);
+  const esc=v=>'"'+String(v??'').replaceAll('"','""')+'"';
+  const blob=new Blob(['\ufeff'+[h,...rows].map(r=>r.map(esc).join(',')).join('\n')],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='comptabilite_LTD_'+new Date().toISOString().slice(0,7)+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+function renderPerformance(container){
+  if(!isDirection()){container.innerHTML='<div class="empty">Accès réservé à la Direction.</div>';return}
+  ensureWeeklyReport();
+  const p=currentPeriodData(), w=statsFor(p.week), pw=statsFor(p.prevWeek), m=statsFor(p.month);
+  const evo=pw.ca?Math.round((w.ca-pw.ca)/pw.ca*100):(w.ca?100:0);
+  const prods=productRanking(p.week), comps=companyRanking(p.week), couriers=courierRanking(p.week);
+  const wg=Number(performanceSettings.weeklyCA||0),mg=Number(performanceSettings.monthlyCA||0);
+  container.innerHTML=`
+    <div class="perf-actions">
+      <button class="btn" onclick="window.open(GOOGLE_SHEET_URL,'_blank','noopener,noreferrer')">Ouvrir Google Sheet</button>
+      <button class="btn-outline" onclick="exportAccountingCSV()">Exporter comptabilité CSV</button>
+    </div>
+    <div class="perf-grid">
+      <div class="perf-card"><div class="k">CA semaine</div><div class="v">${money(w.ca)}</div><div class="s">${w.count} commande(s)</div></div>
+      <div class="perf-card"><div class="k">Panier moyen</div><div class="v">${money(w.avg)}</div><div class="s">Semaine actuelle</div></div>
+      <div class="perf-card"><div class="k">Évolution</div><div class="v">${evo>=0?'+':''}${evo}%</div><div class="s">vs semaine précédente</div></div>
+      <div class="perf-card"><div class="k">CA mois</div><div class="v">${money(m.ca)}</div><div class="s">${m.count} commande(s)</div></div>
+    </div>
+    <div class="perf-section">
+      <h3>Objectifs CA</h3>
+      <div class="perf-two">
+        <div>
+          <label class="form-label">Objectif semaine</label>
+          <input class="form-input" id="goal-weekly-ca" type="number" min="0" value="${wg}">
+          <div class="goal-line"><div class="goal-head"><span>${money(w.ca)} / ${money(wg)}</span><span>${pct(w.ca,wg)}%</span></div><div class="goal-track"><div class="goal-fill" style="width:${pct(w.ca,wg)}%"></div></div></div>
+        </div>
+        <div>
+          <label class="form-label">Objectif mois</label>
+          <input class="form-input" id="goal-monthly-ca" type="number" min="0" value="${mg}">
+          <div class="goal-line"><div class="goal-head"><span>${money(m.ca)} / ${money(mg)}</span><span>${pct(m.ca,mg)}%</span></div><div class="goal-track"><div class="goal-fill" style="width:${pct(m.ca,mg)}%"></div></div></div>
+        </div>
+      </div>
+      <button class="btn btn-sm" style="margin-top:.75rem" onclick="savePerformanceGoals()">Sauvegarder les objectifs</button>
+    </div>
+    <div class="perf-section">
+      <h3>Objectifs par produit — semaine</h3>
+      <div style="display:grid;grid-template-columns:1fr 160px auto;gap:.6rem;align-items:end;margin-bottom:1rem">
+        <div><label class="form-label">Produit</label><select class="filter-sel" id="goal-product" style="width:100%">${products.map(x=>`<option value="${x.name}">${x.name}</option>`).join('')}</select></div>
+        <div><label class="form-label">Objectif quantité</label><input class="form-input" type="number" min="1" id="goal-product-target"></div>
+        <button class="btn btn-sm" onclick="saveProductGoal()">Ajouter</button>
+      </div>
+      ${Object.entries(performanceSettings.productGoals||{}).map(([name,target])=>{const sold=prods.find(x=>x.name===name)?.qty||0;return `
+        <div class="goal-line"><div class="goal-head"><span>${name} — ${sold} / ${target}</span><span>${pct(sold,target)}% <button class="contact-del-btn" onclick="removeProductGoal('${String(name).replaceAll("'","\\'")}')">Supprimer</button></span></div><div class="goal-track"><div class="goal-fill" style="width:${pct(sold,target)}%"></div></div></div>`}).join('')||'<div style="color:var(--text-muted);font-size:12px">Aucun objectif produit.</div>'}
+    </div>
+    <div class="perf-two">
+      <div class="perf-section"><h3>Produits — Top semaine</h3>${prods.slice(0,5).map((x,i)=>`<div class="perf-top-row"><span>#${i+1} ${x.name}</span><strong>${x.qty} unité(s)</strong></div>`).join('')||'<div class="empty">Pas encore de ventes.</div>'}</div>
+      <div class="perf-section"><h3>Entreprises — Top semaine</h3>${comps.slice(0,5).map((x,i)=>`<div class="perf-top-row"><span>#${i+1} ${x.name}</span><strong>${money(x.ca)}</strong></div>`).join('')||'<div class="empty">Pas encore de commandes.</div>'}</div>
+    </div>
+    <div class="perf-section"><h3>Livreurs</h3>${couriers.slice(0,6).map(x=>`<div class="perf-top-row"><span>${x.name}</span><strong>${x.orders} commande(s)</strong></div>`).join('')}</div>
+    <div class="perf-section">
+      <h3>Rapports automatiques de fin de semaine</h3>
+      ${[...weeklyReports].reverse().slice(0,8).map(r=>`<div class="report-card"><strong>${r.range}</strong><div style="font-size:12px;margin-top:.35rem">CA : ${money(r.ca)} · Commandes : ${r.orders} · Panier moyen : ${money(r.avg)}</div><div style="font-size:11px;color:var(--text-muted);margin-top:.25rem">Meilleur produit : ${r.bestProduct} · Meilleure entreprise : ${r.bestCompany} · Livreur : ${r.bestCourier}</div></div>`).join('')||'<div style="color:var(--text-muted);font-size:12px">Le premier rapport sera créé automatiquement à la fin d’une semaine contenant des commandes.</div>'}
+    </div>`;
 }
 
 // ═══ ADMIN ORDERS ═══
