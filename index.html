@@ -1788,6 +1788,76 @@ function savePrices(){
 }
 
 // ═══ SYNC ═══
+
+let realtimeSource=null;
+let realtimeReconnectTimer=null;
+
+function refreshVisiblePanel(){
+  const content=document.getElementById('main-content');
+  if(!content)return;
+  const active=document.querySelector('.nav-item.active')?.id||'';
+
+  if(mode==='admin'){
+    if(active==='nav-aorders') renderAdminOrders(content);
+    else if(active==='nav-aperf') renderPerformance(content);
+    else if(active==='nav-ainfo') renderAdminInfo(content);
+  }else if(mode==='company'){
+    if(active==='nav-hist') renderHistory(content);
+    else if(active==='nav-cmd') renderCatalogue(content);
+  }
+}
+
+function applyRealtimeOrder(order){
+  if(!order?.id)return;
+  const i=orders.findIndex(o=>o.id===order.id);
+  if(i>=0) orders[i]={...orders[i],...order};
+  else orders.push(order);
+  saveFullLocal();
+  refreshVisiblePanel();
+}
+
+function startRealtime(){
+  if(realtimeSource || !window.EventSource)return;
+  try{
+    realtimeSource=new EventSource('/api/events');
+
+    realtimeSource.addEventListener('ltd',ev=>{
+      try{
+        const data=JSON.parse(ev.data||'{}');
+
+        if(data.type==='order_created' && data.order){
+          const existed=orders.some(o=>o.id===data.order.id);
+          applyRealtimeOrder(data.order);
+          if(!existed && mode==='admin') showToast('🔔 Nouvelle commande — '+(data.order.company||data.order.id),3500);
+          return;
+        }
+
+        if(data.type==='order_status' && data.order){
+          applyRealtimeOrder(data.order);
+          const label=(STATUS_ICONS[data.status]||'')+' '+(STATUS_LABELS[data.status]||data.status);
+          if(mode==='admin') showToast('Statut Discord : '+label,2500);
+          return;
+        }
+
+        if(data.type==='data_updated'){
+          syncFromServer();
+        }
+      }catch(e){console.error('Realtime event',e)}
+    });
+
+    realtimeSource.onerror=()=>{
+      try{realtimeSource.close()}catch{}
+      realtimeSource=null;
+      clearTimeout(realtimeReconnectTimer);
+      realtimeReconnectTimer=setTimeout(startRealtime,1500);
+    };
+  }catch(e){
+    realtimeSource=null;
+    clearTimeout(realtimeReconnectTimer);
+    realtimeReconnectTimer=setTimeout(startRealtime,2500);
+  }
+}
+
 let syncInterval=null;
 async function syncFromServer(){
   if(mode==='admin'&&adminDirty)return;
@@ -1824,7 +1894,7 @@ async function syncFromServer(){
     }
   }catch(e){}
 }
-function startSync(){if(syncInterval)return;syncInterval=setInterval(syncFromServer,6000)}
+function startSync(){if(syncInterval)return;syncInterval=setInterval(syncFromServer,30000)}
 window.addEventListener('beforeunload',e=>{if(mode==='admin'&&adminDirty){e.preventDefault();e.returnValue=''}});
 
 // ═══ INIT ═══
@@ -1845,6 +1915,7 @@ window.addEventListener('beforeunload',e=>{if(mode==='admin'&&adminDirty){e.prev
   }
   document.getElementById('co-date')&&(document.getElementById('co-date').min=new Date().toISOString().split('T')[0]);
   startSync();
+  startRealtime();
 })();
 </script>
 </body>
