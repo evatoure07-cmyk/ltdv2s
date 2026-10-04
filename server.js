@@ -21,6 +21,38 @@ const CACHE_FILE = path.join(__dirname, 'data-cache.json');
 let memoryCache = null;
 
 app.use(express.json({ limit: '8mb' }));
+
+const realtimeClients = new Set();
+
+function broadcastRealtime(event) {
+  const payload = 'event: ltd\ndata: ' + JSON.stringify({ ...event, at: Date.now() }) + '\n\n';
+  for (const client of [...realtimeClients]) {
+    try { client.write(payload); }
+    catch { realtimeClients.delete(client); }
+  }
+}
+
+app.get('/api/events', (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+  res.write(': connected\n\n');
+  realtimeClients.add(res);
+
+  const heartbeat = setInterval(() => {
+    try { res.write(': ping\n\n'); }
+    catch { clearInterval(heartbeat); realtimeClients.delete(res); }
+  }, 20000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    realtimeClients.delete(res);
+  });
+});
+
+
 app.use(express.static(path.join(__dirname)));
 
 function emptyData() {
@@ -237,6 +269,7 @@ async function updateOrderFromDiscord(orderId, status, userTag = 'Discord') {
   current.revision = Number(current.revision || 0) + 1;
   const saved = await persistData(current);
   if (!saved.ok) throw new Error(saved.error || 'Sauvegarde Supabase impossible');
+  broadcastRealtime({ type: 'order_status', orderId, status, source: 'discord', by: userTag, order });
   return order;
 }
 async function syncDiscordThreadStatus(order, status) {
@@ -414,6 +447,7 @@ app.post('/api/save', async (req, res) => {
         revision: body.revision
       });
     }
+    broadcastRealtime({ type: 'data_updated', source: 'site', revision: body.revision });
     res.json({
       ok: true,
       localCached: true,
@@ -459,6 +493,7 @@ app.post('/api/orders', async (req, res) => {
     current.revision = Number(current.revision || 0) + 1;
     writeCache(current);
     const storage = await persistData(current);
+    if (idx >= 0) broadcastRealtime({ type: 'order_created', source: 'site', order: current.orders[idx] });
 
     res.status(discord.ok ? 200 : 207).json({
       ok: true,
@@ -506,6 +541,7 @@ app.post('/api/discord/status', async (req, res) => {
     current.revision = Number(current.revision || 0) + 1;
     const saved = await persistData(current);
     const threadUpdated = await syncDiscordThreadStatus(current.orders[idx], status);
+    if (saved.ok) broadcastRealtime({ type: 'order_status', orderId, status, source: 'site', order: current.orders[idx] });
     res.status(saved.ok ? 200 : 503).json({ ok: saved.ok, remoteSaved: saved.ok, threadUpdated, error: saved.error || '' });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
