@@ -1234,6 +1234,7 @@ function setupAdminApp(){
     {id:'aprods',icon:'📦',label:'Produits'},
     {id:'acos',icon:'🏢',label:'Entreprises'},
     {id:'ainfo',icon:'ℹ️',label:'Infos entreprises'},
+    {id:'gsheet',icon:'↗',label:'Google Sheet'},
   ];
   renderSidebar(nav,'aorders');
   showAdminPanel('aorders');
@@ -1249,6 +1250,11 @@ function showAdminPanel(id){
   else if(id==='aprods'){setTopbar('Produits','Administration');renderAdminProducts(content)}
   else if(id==='acos'){setTopbar('Entreprises','Administration');renderAdminCompanies(content)}
   else if(id==='ainfo'){setTopbar('Infos entreprises','Administration');renderAdminInfo(content)}
+  else if(id==='gsheet'){
+    window.open('https://docs.google.com/spreadsheets/d/1C-pUT6rwR5ZA7o-XTfGm1pcZXRarKmAGKjwaU28mxOM/edit','_blank','noopener,noreferrer');
+    document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+    document.getElementById('nav-aorders')?.classList.add('active');
+  }
 }
 
 // ═══ ADMIN ORDERS ═══
