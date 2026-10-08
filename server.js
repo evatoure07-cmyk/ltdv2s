@@ -16,7 +16,7 @@ const SUPABASE_URL = String(process.env.SUPABASE_URL || '')
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const SUPABASE_TABLE = process.env.SUPABASE_TABLE || 'ltd_state';
 const STATE_ID = 1;
-const DELAY_ALERT_MINUTES = Math.max(5, Number(process.env.DELAY_ALERT_MINUTES || 20));
+const DELAY_ALERT_MINUTES = Math.max(5, Number(process.env.DELAY_ALERT_MINUTES || 1440));
 
 const CACHE_FILE = path.join(__dirname, 'data-cache.json');
 let memoryCache = null;
