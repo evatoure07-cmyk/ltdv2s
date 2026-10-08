@@ -1744,11 +1744,17 @@ function applyOrderStatus(id){
   const idx=orders.findIndex(o=>o.id===id);
   if(idx<0)return;
   const oldStatus=orders[idx].status;
+  let cancelReason='';
+  if(newStatus==='refused'){
+    cancelReason=(prompt('Motif obligatoire du refus / de l annulation :',orders[idx].cancelReason||'')||'').trim();
+    if(!cancelReason){showToast('⚠ Un motif est obligatoire pour refuser une commande');return}
+    orders[idx].cancelReason=cancelReason;
+  }
   const courier=(document.getElementById('odm-deliverer')?.value||'').trim();
   if(courier)orders[idx].deliveredBy=courier;
   orders[idx].status=newStatus;
   orders[idx].statusHistory=orders[idx].statusHistory||[];
-  orders[idx].statusHistory.push({status:newStatus,date:new Date().toLocaleDateString('fr-FR'),time:new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})});
+  orders[idx].statusHistory.push({status:newStatus,date:new Date().toLocaleDateString('fr-FR'),time:new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}),ts:Date.now(),reason:cancelReason||undefined});
   // Sync to company history
   const o=orders[idx];
   if(o.companyId){
@@ -1757,6 +1763,7 @@ function applyOrderStatus(id){
     const hi=hist.findIndex(h=>h.id===id);
     if(hi>=0){hist[hi].status=newStatus;localStorage.setItem(key,JSON.stringify(hist))}
   }
+  addDirectionLog('Statut commande modifié',id+' · '+(STATUS_LABELS[oldStatus]||oldStatus)+' → '+(STATUS_LABELS[newStatus]||newStatus)+(cancelReason?' · Motif : '+cancelReason:''));
   markAdminDirty();
   notifyDiscordStatus(o);
   closeModal('order-detail-modal');
@@ -1780,7 +1787,7 @@ function deleteOrderConfirm(id){
   });
 }
 
-function notifyDiscordStatus(order){fetch('/api/discord/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({orderId:order.id,status:order.status})}).catch(()=>{});}
+function notifyDiscordStatus(order){fetch('/api/discord/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({orderId:order.id,status:order.status,reason:order.cancelReason||''})}).catch(()=>{});}
 
 function exportAllCSV(){
   const h='ID,Entreprise,Tel,Date,Horaire,Produits,Total,Statut\n';
@@ -2008,8 +2015,28 @@ function deleteCo(i){
 }
 
 function openCompanyInfo(i){
-  const co=companies[i]; document.getElementById('company-info-title').textContent='Infos — '+co.name;
-  document.getElementById('company-info-body').innerHTML=`<div class="info-grid">${[['Entreprise',co.name],['IBAN',co.iban||'Non renseigné'],['Contacts',(co.contacts||[]).length+' contact(s)'],['Création',co.createdAt||'—'],['Statut',co.active===false?'Suspendu':'Actif'],['Note',co.note||'—']].map(([k,v])=>`<div class="info-box"><span>${k}</span><strong>${v}</strong></div>`).join('')}</div><div style="margin-top:1rem"><h3>Contacts</h3>${(co.contacts||[]).map(c=>`<div class="detail-row"><span class="detail-key">${c.name}</span><span class="detail-val">${c.phone}${c.note?' · '+c.note:''}</span></div>`).join('')||'<div class="empty">Aucun contact renseigné.</div>'}</div>`;
+  const co=companies[i];
+  const hist=orders.filter(o=>o.companyId===co.id||o.company===co.name);
+  const delivered=hist.filter(o=>o.status==='done');
+  const spent=delivered.reduce((sum,o)=>sum+Number(o.total||0),0);
+  const avg=delivered.length?Math.round(spent/delivered.length):0;
+  const last=[...hist].sort((a,b)=>Number(b.createdTs||0)-Number(a.createdTs||0))[0];
+  const favNames=(co.favorites||[]).map(id=>products.find(p=>p.id===id)?.name).filter(Boolean);
+  document.getElementById('company-info-title').textContent='Fiche entreprise — '+co.name;
+  const info=[
+    ['Entreprise',co.name],['Statut',co.active===false?'Suspendu':'Actif'],['IBAN',co.iban||'Non renseigné'],
+    ['Commandes',hist.length],['Livrées',delivered.length],['CA livré','$'+spent.toLocaleString('fr-FR')],
+    ['Panier moyen','$'+avg.toLocaleString('fr-FR')],['Dernière commande',last?(last.createdAt||last.date||'—'):'Aucune'],
+    ['Favoris',favNames.length],['Création',co.createdAt||'—'],['Contacts',(co.contacts||[]).length+' contact(s)'],['Note',co.note||'—']
+  ];
+  const infoHtml=info.map(([k,v])=>'<div class="info-box"><span>'+escHtml(k)+'</span><strong>'+escHtml(v)+'</strong></div>').join('');
+  const favHtml=favNames.length?favNames.map(n=>'<span class="sbadge sbadge-ready" style="margin:.2rem">'+escHtml(n)+'</span>').join(''):'<div class="empty">Aucun favori.</div>';
+  const contactsHtml=(co.contacts||[]).map(c=>'<div class="detail-row"><span class="detail-key">'+escHtml(c.name)+'</span><span class="detail-val">'+escHtml(c.phone)+(c.note?' · '+escHtml(c.note):'')+'</span></div>').join('')||'<div class="empty">Aucun contact renseigné.</div>';
+  const recentHtml=[...hist].reverse().slice(0,5).map(o=>'<div class="detail-row"><span class="detail-key">'+escHtml(o.createdAt||o.date||'—')+' · '+escHtml(o.id)+'</span><span class="detail-val">'+(STATUS_ICONS[o.status]||'')+' '+escHtml(STATUS_LABELS[o.status]||o.status)+' · $'+Number(o.total||0).toLocaleString('fr-FR')+'</span></div>').join('')||'<div class="empty">Aucune commande.</div>';
+  document.getElementById('company-info-body').innerHTML='<div class="info-grid">'+infoHtml+'</div>'+
+    '<div style="margin-top:1rem"><h3>⭐ Produits favoris</h3>'+favHtml+'</div>'+
+    '<div style="margin-top:1rem"><h3>📞 Contacts</h3>'+contactsHtml+'</div>'+
+    '<div style="margin-top:1rem"><h3>🧾 Dernières commandes</h3>'+recentHtml+'</div>';
   document.getElementById('company-info-modal').classList.add('open');
 }
 function openCompanySettings(i){
