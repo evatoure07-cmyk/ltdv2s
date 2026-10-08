@@ -16,6 +16,7 @@ const SUPABASE_URL = String(process.env.SUPABASE_URL || '')
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const SUPABASE_TABLE = process.env.SUPABASE_TABLE || 'ltd_state';
 const STATE_ID = 1;
+const DELAY_ALERT_MINUTES = Math.max(5, Number(process.env.DELAY_ALERT_MINUTES || 20));
 
 const CACHE_FILE = path.join(__dirname, 'data-cache.json');
 let memoryCache = null;
@@ -56,7 +57,7 @@ app.get('/api/events', (req, res) => {
 app.use(express.static(path.join(__dirname)));
 
 function emptyData() {
-  return { schemaVersion: 3, revision: 0, updatedAt: 0, orders: [], companies: [], products: [], categories: [] };
+  return { schemaVersion: 5, revision: 0, updatedAt: 0, orders: [], companies: [], products: [], categories: [], notifications: [], announcements: [], directionLog: [], trash: [] };
 }
 
 function normalizeData(input) {
@@ -64,7 +65,7 @@ function normalizeData(input) {
   return {
     ...emptyData(),
     ...src,
-    schemaVersion: 3,
+    schemaVersion: 5,
     revision: Number(src.revision || 0) || 0,
     updatedAt: Number(src.updatedAt || src._updatedAt || 0) || 0,
     orders: Array.isArray(src.orders) ? src.orders : [],
@@ -242,6 +243,107 @@ function safeThreadName(order, status) {
   const company = String(order.company || 'Commande').replace(/\s+/g, ' ').trim();
   return `${meta.emoji} ${meta.label} · ${company}`.slice(0, 100);
 }
+function ensureOpsArrays(data) {
+  data.notifications = Array.isArray(data.notifications) ? data.notifications : [];
+  data.directionLog = Array.isArray(data.directionLog) ? data.directionLog : [];
+  data.announcements = Array.isArray(data.announcements) ? data.announcements : [];
+  data.trash = Array.isArray(data.trash) ? data.trash : [];
+  return data;
+}
+function pushAdminNotification(data, title, message, type = 'info') {
+  ensureOpsArrays(data);
+  const n = {
+    id: 'notif_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7),
+    title, message, type, audience: 'admin', companyIds: [], createdTs: Date.now(), readBy: []
+  };
+  data.notifications.push(n);
+  if (data.notifications.length > 250) data.notifications = data.notifications.slice(-250);
+  return n;
+}
+function pushDirectionLog(data, action, details, actor = 'Système') {
+  ensureOpsArrays(data);
+  data.directionLog.push({
+    id: 'log_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7),
+    action, details, actor, createdTs: Date.now()
+  });
+  if (data.directionLog.length > 500) data.directionLog = data.directionLog.slice(-500);
+}
+async function archiveDiscordThread(order, status) {
+  if (!['done','refused','cancel'].includes(status) || !order?.discord?.threadId || !(await waitForDiscordReady())) return false;
+  try {
+    const thread = await discordClient.channels.fetch(order.discord.threadId);
+    if (!thread) return false;
+    if (thread.setArchived) await thread.setArchived(true, 'Commande terminée');
+    return true;
+  } catch (e) {
+    console.error('Discord thread archive failed:', e.message);
+    return false;
+  }
+}
+function latestOrderActivityTs(order) {
+  const hist = Array.isArray(order?.statusHistory) ? order.statusHistory : [];
+  for (let i = hist.length - 1; i >= 0; i--) {
+    const ts = Number(hist[i]?.ts || 0);
+    if (ts > 0) return ts;
+  }
+  return Number(order?.createdTs || 0) || Date.now();
+}
+async function sendDelayAlertDiscord(order, minutes) {
+  const meta = discordStatusMeta(order.status);
+  const message = `⏰ **RETARD — ${order.company || order.id}**\nLa commande **${order.id}** n'a pas avancé depuis **${minutes} min**. Il faut se bouger un peu 👀\nStatut actuel : ${meta.emoji} **${meta.label}**`;
+  if (await waitForDiscordReady()) {
+    try {
+      if (order?.discord?.threadId) {
+        const thread = await discordClient.channels.fetch(order.discord.threadId);
+        if (thread?.send) { await thread.send(message); return true; }
+      }
+      if (order?.discord?.channelId) {
+        const channel = await discordClient.channels.fetch(order.discord.channelId);
+        if (channel?.send) { await channel.send(message); return true; }
+      }
+    } catch (e) {
+      console.error('Discord delay alert bot failed:', e.message);
+    }
+  }
+  if (DISCORD_WEBHOOK) {
+    try {
+      const target = DISCORD_WEBHOOK + (DISCORD_WEBHOOK.includes('?') ? '&' : '?') + 'wait=true';
+      const r = await remoteFetch(target, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ content: message }) });
+      return r.ok;
+    } catch (e) { console.error('Discord delay alert webhook failed:', e.message); }
+  }
+  return false;
+}
+async function checkDelayedOrders() {
+  try {
+    const { data } = await getDataSafe();
+    const current = ensureOpsArrays(normalizeData(data));
+    const now = Date.now();
+    let changed = false;
+    for (const order of current.orders) {
+      if (!['awaiting_payment','missing','ready'].includes(String(order.status || ''))) continue;
+      const ageMin = Math.floor((now - latestOrderActivityTs(order)) / 60000);
+      if (ageMin < DELAY_ALERT_MINUTES) continue;
+      if (order.delayAlert?.status === order.status) continue;
+      const sent = await sendDelayAlertDiscord(order, ageMin);
+      if (!sent) continue;
+      order.delayAlert = { status: order.status, sentTs: now };
+      const n = pushAdminNotification(current, '⏰ Commande en retard', `${order.company || order.id} · ${order.id} · ${ageMin} min sans avancée`, 'delay');
+      pushDirectionLog(current, 'Alerte retard Discord', `${order.id} · ${order.company || ''} · ${ageMin} min`, 'Maritza');
+      broadcastRealtime({ type:'notification', source:'delay', notification:n });
+      changed = true;
+    }
+    if (changed) {
+      current.updatedAt = Date.now();
+      current.revision = Number(current.revision || 0) + 1;
+      const saved = await persistData(current);
+      if (saved.ok) broadcastRealtime({ type:'data_updated', source:'delay', revision:current.revision });
+    }
+  } catch (e) {
+    console.error('Delay monitor failed:', e.message);
+  }
+}
+
 async function waitForDiscordReady(timeoutMs = 8000) {
   if (!DISCORD_BOT_TOKEN) return false;
   if (discordClient?.isReady()) return true;
@@ -255,27 +357,36 @@ async function updateOrderFromDiscord(orderId, status, userTag = 'Discord') {
   const current = normalizeData(data);
   const idx = current.orders.findIndex(o => o.id === orderId);
   if (idx < 0) throw new Error('Commande introuvable');
+  ensureOpsArrays(current);
   const order = current.orders[idx];
   order.status = status;
+  if (status === 'refused' && !order.cancelReason) order.cancelReason = 'Refusé depuis Discord par ' + userTag;
   order.statusHistory = order.statusHistory || [];
   order.statusHistory.push({
     status,
     date: new Date().toLocaleDateString('fr-FR'),
     time: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+    ts: Date.now(),
     source: 'discord',
-    by: userTag
+    by: userTag,
+    reason: status === 'refused' ? order.cancelReason : undefined
   });
+  order.delayAlert = null;
+  const notif = pushAdminNotification(current, 'Statut Discord mis à jour', `${order.company || order.id} · ${discordStatusMeta(status).emoji} ${discordStatusMeta(status).label}`, 'status');
+  pushDirectionLog(current, 'Statut modifié depuis Discord', `${order.id} · ${discordStatusMeta(status).label}`, userTag);
   current.updatedAt = Date.now();
   current.revision = Number(current.revision || 0) + 1;
   const saved = await persistData(current);
   if (!saved.ok) throw new Error(saved.error || 'Sauvegarde Supabase impossible');
   broadcastRealtime({ type: 'order_status', orderId, status, source: 'discord', by: userTag, order });
+  broadcastRealtime({ type: 'notification', source: 'discord', notification: notif });
   return order;
 }
 async function syncDiscordThreadStatus(order, status) {
   if (!order?.discord?.threadId || !(await waitForDiscordReady())) return false;
   try {
     const thread = await discordClient.channels.fetch(order.discord.threadId);
+    if (thread?.archived && !['done','refused','cancel'].includes(status) && thread.setArchived) await thread.setArchived(false, 'Commande réouverte');
     if (thread?.setName) await thread.setName(safeThreadName(order, status), `Statut ${order.id}: ${discordStatusMeta(status).label}`);
     return true;
   } catch (e) {
@@ -408,13 +519,12 @@ if (DISCORD_BOT_TOKEN) {
       if (updated?.discord?.threadId) {
         try {
           const thread = await discordClient.channels.fetch(updated.discord.threadId);
-          if (thread?.send) {
-            await thread.send(`${discordStatusMeta(status).emoji} **${discordStatusMeta(status).label}**`);
-          }
+          if (thread?.send) await thread.send(`${discordStatusMeta(status).emoji} **${discordStatusMeta(status).label}**`);
         } catch (e) {
           console.error('Discord thread confirmation failed:', e.message);
         }
       }
+      await archiveDiscordThread(updated, status);
     } catch (e) {
       console.error('Discord reaction status error:', e.message);
     }
@@ -540,7 +650,7 @@ app.post('/api/orders', async (req, res) => {
     }
 
     const { data } = await getDataSafe();
-    const current = normalizeData(data);
+    const current = ensureOpsArrays(normalizeData(data));
     const existing = current.orders.findIndex(o => o.id === order.id);
     if (existing < 0) current.orders.push(order);
     else current.orders[existing] = { ...current.orders[existing], ...order };
@@ -548,12 +658,15 @@ app.post('/api/orders', async (req, res) => {
     const discord = await sendDiscord(order).catch(e => ({ ok: false, error: e.message }));
     const idx = current.orders.findIndex(o => o.id === order.id);
     if (idx >= 0 && discord?.discord) current.orders[idx].discord = discord.discord;
+    const newOrderNotification = pushAdminNotification(current, '🔔 Nouvelle commande', `${order.company} · ${order.id} · $${Number(order.total||0).toLocaleString('fr-FR')}`, 'order');
+    pushDirectionLog(current, 'Nouvelle commande reçue', `${order.id} · ${order.company}`, 'Site client');
 
     current.updatedAt = Date.now();
     current.revision = Number(current.revision || 0) + 1;
     writeCache(current);
     const storage = await persistData(current);
     if (idx >= 0) broadcastRealtime({ type: 'order_created', source: 'site', order: current.orders[idx] });
+    broadcastRealtime({ type: 'notification', source: 'site', notification: newOrderNotification });
 
     res.status(discord.ok ? 200 : 207).json({
       ok: true,
@@ -580,29 +693,43 @@ app.post('/api/notify', async (req, res) => {
 
 app.post('/api/discord/status', async (req, res) => {
   try {
-    const { orderId, status } = req.body || {};
+    const { orderId, status, reason } = req.body || {};
     const allowed = ['pending','awaiting_payment','missing','validated','ready','done','refused','cancel'];
     if (!orderId || !allowed.includes(status)) {
       return res.status(400).json({ ok: false, error: 'Statut invalide' });
     }
     const { data } = await getDataSafe();
-    const current = normalizeData(data);
+    const current = ensureOpsArrays(normalizeData(data));
     const idx = current.orders.findIndex(o => o.id === orderId);
     if (idx < 0) return res.status(404).json({ ok: false, error: 'Commande introuvable' });
     current.orders[idx].status = status;
+    if (status === 'refused') {
+      const mandatoryReason = String(reason || current.orders[idx].cancelReason || '').trim();
+      if (!mandatoryReason) return res.status(400).json({ ok:false, error:'Motif de refus obligatoire' });
+      current.orders[idx].cancelReason = mandatoryReason;
+    }
+    current.orders[idx].delayAlert = null;
     current.orders[idx].statusHistory = current.orders[idx].statusHistory || [];
     current.orders[idx].statusHistory.push({
       status,
       date: new Date().toLocaleDateString('fr-FR'),
       time: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
-      source: 'admin'
+      ts: Date.now(),
+      source: 'admin',
+      reason: status === 'refused' ? current.orders[idx].cancelReason : undefined
     });
+    const statusNotification = pushAdminNotification(current, 'Statut commande modifié', `${current.orders[idx].company || orderId} · ${discordStatusMeta(status).emoji} ${discordStatusMeta(status).label}`, 'status');
+    pushDirectionLog(current, 'Statut commande modifié', `${orderId} · ${discordStatusMeta(status).label}`, 'Direction');
     current.updatedAt = Date.now();
     current.revision = Number(current.revision || 0) + 1;
     const saved = await persistData(current);
     const threadUpdated = await syncDiscordThreadStatus(current.orders[idx], status);
-    if (saved.ok) broadcastRealtime({ type: 'order_status', orderId, status, source: 'site', order: current.orders[idx] });
-    res.status(saved.ok ? 200 : 503).json({ ok: saved.ok, remoteSaved: saved.ok, threadUpdated, error: saved.error || '' });
+    const threadArchived = saved.ok ? await archiveDiscordThread(current.orders[idx], status) : false;
+    if (saved.ok) {
+      broadcastRealtime({ type: 'order_status', orderId, status, source: 'site', order: current.orders[idx] });
+      broadcastRealtime({ type: 'notification', source: 'site', notification: statusNotification });
+    }
+    res.status(saved.ok ? 200 : 503).json({ ok: saved.ok, remoteSaved: saved.ok, threadUpdated, threadArchived, error: saved.error || '' });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
@@ -677,4 +804,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('LTD Sandy Shores on port', PORT);
   console.log('Discord webhook configured:', Boolean(DISCORD_WEBHOOK));
   console.log('Persistent storage:', storageConfig());
+  console.log('Delay alerts after', DELAY_ALERT_MINUTES, 'minutes');
+  setTimeout(checkDelayedOrders, 15000);
+  setInterval(checkDelayedOrders, 60000);
 });
