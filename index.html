@@ -1765,12 +1765,18 @@ function applyOrderStatus(id){
 }
 
 function deleteOrderConfirm(id){
-  showWarn('Supprimer la commande '+id+' ?',()=>{
+  showWarn('Mettre la commande '+id+' dans la corbeille ?',()=>{
     const idx=orders.findIndex(o=>o.id===id);
-    if(idx>=0){orders.splice(idx,1);markAdminDirty()}
+    if(idx>=0){
+      const o=orders[idx];
+      moveToTrash('order',o,o.id+' · '+(o.company||''));
+      orders.splice(idx,1);
+      addDirectionLog('Commande mise à la corbeille',o.id+' · '+(o.company||''));
+      markAdminDirty();
+    }
     closeModal('order-detail-modal');
     renderAdminOrders(document.getElementById('main-content'));
-    showToast('✅ Commande supprimée');
+    showToast('🗑 Commande déplacée dans la corbeille');
   });
 }
 
@@ -1860,6 +1866,7 @@ function addProduct(){
   if(cat==='__new'){cat=prompt('Nom de la nouvelle catégorie :','Nouvelle catégorie')?.trim()||''; if(!cat)return; if(!categories.find(c=>c.name===cat))categories.push({name:cat,icon:prompt('Icône de la catégorie :','📦')||'📦'});}
   if(!name||isNaN(price)||!cat){showToast('⚠ Nom, prix et catégorie requis');return}
   products.push({id:'prod_'+Date.now(),icon,name,unit:unit||'0.5',price,cat});
+  addDirectionLog('Produit ajouté',name+' · $'+price);
   markAdminDirty();['np-icon','np-name','np-unit','np-price'].forEach(id=>document.getElementById(id).value='');
   renderAdminProducts(document.getElementById('main-content'));showToast('✅ Produit ajouté');
 }
@@ -1870,6 +1877,7 @@ function editProd(i){
   const price=parseFloat(prompt('Prix ($) :',p.price));if(isNaN(price))return;
   const icon=prompt('Icône :',p.icon)||p.icon;
   products[i]={...p,name,price,icon};
+  addDirectionLog('Produit modifié',p.name+' → '+name+' · $'+price);
   markAdminDirty();renderProdGrid(true);showToast('✅ Produit modifié');
 }
 
@@ -1880,8 +1888,14 @@ function toggleDestockage(i){
 }
 
 function deleteProd(i){
-  showWarn('Supprimer "'+products[i].name+'" ?',()=>{
-    products.splice(i,1);markAdminDirty();renderProdGrid(true);showToast('✅ Produit supprimé');
+  showWarn('Mettre "'+products[i].name+'" dans la corbeille ?',()=>{
+    const p=products[i];
+    moveToTrash('product',p,p.name);
+    products.splice(i,1);
+    addDirectionLog('Produit mis à la corbeille',p.name);
+    markAdminDirty();
+    renderProdGrid(true);
+    showToast('🗑 Produit déplacé dans la corbeille');
   });
 }
 
@@ -1895,7 +1909,14 @@ function editCategory(i){
 }
 function deleteCategory(i){
   const c=categories[i]; if(products.some(p=>p.cat===c.name)){showToast('⚠ Cette catégorie contient encore des produits');return}
-  showWarn('Supprimer la catégorie « '+c.name+' » ?',()=>{categories.splice(i,1);markAdminDirty();renderAdminProducts(document.getElementById('main-content'));showToast('✅ Catégorie supprimée')});
+  showWarn('Mettre la catégorie « '+c.name+' » dans la corbeille ?',()=>{
+    moveToTrash('category',c,c.name);
+    categories.splice(i,1);
+    addDirectionLog('Catégorie mise à la corbeille',c.name);
+    markAdminDirty();
+    renderAdminProducts(document.getElementById('main-content'));
+    showToast('🗑 Catégorie déplacée dans la corbeille');
+  });
 }
 
 function resetCatalogue(){
@@ -1947,7 +1968,8 @@ function createCompany(){
   if(!name){showToast('⚠ Entrez un nom');return}
   if(companies.find(c=>c.name.toLowerCase()===name.toLowerCase())){showToast('⚠ Entreprise déjà existante');return}
   const pw=genPW();
-  companies.push({id:genId(),name,password:pw,note,customPrices:{},active:true,createdAt:new Date().toLocaleDateString('fr-FR'),contacts:[],iban:''});
+  companies.push({id:genId(),name,password:pw,note,customPrices:{},active:true,createdAt:new Date().toLocaleDateString('fr-FR'),contacts:[],iban:'',favorites:[]});
+  addDirectionLog('Entreprise créée',name);
   markAdminDirty();
   document.getElementById('nco-name').value='';document.getElementById('nco-note').value='';
   renderCoGrid(true);
@@ -1974,8 +1996,14 @@ function toggleCoActive(i){
 }
 
 function deleteCo(i){
-  showWarn('Supprimer "'+companies[i].name+'" ?',()=>{
-    companies.splice(i,1);markAdminDirty();renderCoGrid(true);showToast('✅ Entreprise supprimée');
+  showWarn('Mettre "'+companies[i].name+'" dans la corbeille ?',()=>{
+    const co=companies[i];
+    moveToTrash('company',co,co.name);
+    companies.splice(i,1);
+    addDirectionLog('Entreprise mise à la corbeille',co.name);
+    markAdminDirty();
+    renderCoGrid(true);
+    showToast('🗑 Entreprise déplacée dans la corbeille');
   });
 }
 
@@ -1986,7 +2014,7 @@ function openCompanyInfo(i){
 }
 function openCompanySettings(i){
   const co=companies[i]; document.getElementById('company-settings-title').textContent='Réglages — '+co.name;
-  document.getElementById('company-settings-body').innerHTML=`<div class="settings-list"><button class="settings-action" onclick="viewAsCompany(${i})"><span>👁</span><div><b>Voir comme l’entreprise</b><small>Ouvrir exactement son espace client.</small></div></button><button class="settings-action" onclick="resetCoMdp(${i})"><span>🔑</span><div><b>Réinitialiser le mot de passe</b><small>Générer un nouveau mot de passe.</small></div></button><button class="settings-action" onclick="closeModal('company-settings-modal');toggleCoActive(${i})"><span>${co.active===false?'▶':'⏸'}</span><div><b>${co.active===false?'Réactiver':'Suspendre'} le compte</b><small>${co.active===false?'Autoriser à nouveau la connexion.':'Bloquer temporairement la connexion.'}</small></div></button>${!co.permanent?`<button class="settings-action danger" onclick="deleteCo(${i});closeModal('company-settings-modal')"><span>🗑</span><div><b>Supprimer le compte</b><small>Supprimer définitivement l’entreprise.</small></div></button>`:''}</div>`;
+  document.getElementById('company-settings-body').innerHTML=`<div class="settings-list"><button class="settings-action" onclick="viewAsCompany(${i})"><span>👁</span><div><b>Voir comme l’entreprise</b><small>Ouvrir exactement son espace client.</small></div></button><button class="settings-action" onclick="resetCoMdp(${i})"><span>🔑</span><div><b>Réinitialiser le mot de passe</b><small>Générer un nouveau mot de passe.</small></div></button><button class="settings-action" onclick="closeModal('company-settings-modal');toggleCoActive(${i})"><span>${co.active===false?'▶':'⏸'}</span><div><b>${co.active===false?'Réactiver':'Suspendre'} le compte</b><small>${co.active===false?'Autoriser à nouveau la connexion.':'Bloquer temporairement la connexion.'}</small></div></button>${!co.permanent?`<button class="settings-action danger" onclick="deleteCo(${i});closeModal('company-settings-modal')"><span>🗑</span><div><b>Supprimer le compte</b><small>Déplacer l’entreprise dans la corbeille.</small></div></button>`:''}</div>`;
   document.getElementById('company-settings-actions').innerHTML=`<button class="btn-outline" onclick="closeModal('company-settings-modal')">Fermer</button>`; document.getElementById('company-settings-modal').classList.add('open');
 }
 function viewAsCompany(i){const co=companies[i];closeModal('company-settings-modal');curCo={...co};mode='company';sessionStorage.setItem('ltd_session',JSON.stringify({mode:'company',coId:co.id,preview:true}));launchApp();showToast('👁 Aperçu de '+co.name)}
