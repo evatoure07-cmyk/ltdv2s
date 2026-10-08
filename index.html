@@ -1652,6 +1652,13 @@ function renderAdminOrders(container){
   const pending=orders.filter(o=>['pending','awaiting_payment','missing','validated'].includes(o.status)).length;
   const done=orders.filter(o=>o.status==='done').length;
   container.innerHTML=`
+    <div class="panel-card" style="margin-bottom:1rem">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap">
+        <div><strong>⏰ Alerte retard Discord</strong><div style="font-size:11px;color:var(--text-muted);margin-top:.2rem">Maritza envoie une alerte après 24 heures sans changement de statut.</div></div>
+        <span class="sbadge sbadge-ready">24 h</span>
+      </div>
+    </div>
+
     <div class="admin-stats">
       <div class="astat"><span class="astat-val astat-gold">$${ca.toLocaleString()}</span><span class="astat-label">CA Total</span></div>
       <div class="astat"><span class="astat-val astat-blue">${orders.length}</span><span class="astat-label">Commandes</span></div>
