@@ -188,6 +188,36 @@ html,body{height:100%;font-family:'Lato',sans-serif;background:var(--sand);color
 .report-card{background:#F8EDDC;border:1px solid var(--border);border-radius:5px;padding:.9rem;margin-top:.6rem}
 @media(max-width:850px){.perf-grid{grid-template-columns:repeat(2,1fr)}.perf-two{grid-template-columns:1fr}}
 
+/* ── NOTIFICATIONS / ANNONCES / CORBEILLE ── */
+.notification-btn{position:relative}
+.notification-count{position:absolute;top:-5px;right:-5px;min-width:17px;height:17px;padding:0 4px;border-radius:20px;background:#8B1A1A;color:#fff;font-size:9px;font-weight:800;display:none;align-items:center;justify-content:center}
+.notification-count.show{display:flex}
+.notification-list{display:flex;flex-direction:column;gap:.65rem;max-height:62vh;overflow:auto}
+.notification-item{border:1px solid var(--border);background:#FFF8EA;border-radius:6px;padding:.9rem;cursor:pointer}
+.notification-item.unread{border-left:4px solid var(--brown-mid);background:#F8EDDC}
+.notification-item-title{font-weight:800;color:var(--text-mid);font-size:12px}
+.notification-item-msg{font-size:11px;color:var(--text-muted);margin-top:.25rem;line-height:1.45}
+.notification-item-date{font-size:9px;color:var(--text-muted);margin-top:.45rem}
+.announcement-overlay{position:fixed;inset:0;background:rgba(34,25,20,.72);z-index:9999;display:none;align-items:center;justify-content:center;padding:1.25rem}
+.announcement-overlay.open{display:flex}
+.announcement-page{width:min(720px,96vw);max-height:90vh;overflow:auto;background:#FFF8EA;border:1.5px solid var(--border);border-radius:10px;box-shadow:0 24px 80px rgba(0,0,0,.35);padding:2rem;text-align:center}
+.announcement-page h2{font-family:'Playfair Display',serif;font-size:2rem;color:var(--brown);margin:.3rem 0 1rem}
+.announcement-page .announcement-message{white-space:pre-wrap;line-height:1.7;color:var(--text-mid);font-size:14px;text-align:left;background:#F8EDDC;border:1px solid var(--border);padding:1.2rem;border-radius:7px}
+.announcement-confirm{display:flex;justify-content:center;margin-top:1.5rem}
+.favorite-btn{position:absolute;right:.55rem;top:.5rem;border:0;background:transparent;font-size:20px;cursor:pointer;opacity:.55}
+.favorite-btn.active{opacity:1}
+.product-card{position:relative}
+.draft-banner{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;background:#F8EDDC;border:1px solid var(--border);border-radius:6px;padding:.8rem 1rem;margin-bottom:1rem}
+.draft-actions{display:flex;gap:.45rem;flex-wrap:wrap}
+.admin-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+.panel-card{background:#FFF8EA;border:1.5px solid var(--border);border-radius:6px;padding:1.15rem;box-shadow:var(--sh);margin-bottom:1rem}
+.panel-card h3{font-family:'Playfair Display',serif;color:var(--text-mid);margin:0 0 .8rem}
+.check-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.45rem;max-height:220px;overflow:auto;padding:.65rem;background:#F8EDDC;border:1px solid var(--border);border-radius:5px}
+.check-row{display:flex;gap:.5rem;align-items:center;font-size:11px}
+.log-row,.trash-row{display:grid;grid-template-columns:150px 150px 1fr auto;gap:.75rem;align-items:center;padding:.7rem 0;border-bottom:1px solid var(--border);font-size:11px}
+.log-row:last-child,.trash-row:last-child{border-bottom:none}
+@media(max-width:850px){.admin-grid-2{grid-template-columns:1fr}.check-list{grid-template-columns:1fr}.log-row,.trash-row{grid-template-columns:1fr}}
+
 /* ── ADMIN ── */
 .admin-tabs{display:flex;border-bottom:2px solid var(--border);margin-bottom:1.5rem}
 .admin-tab{background:none;border:none;border-bottom:3px solid transparent;padding:.65rem 1.25rem;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-muted);cursor:pointer;font-family:'Lato',sans-serif;font-weight:700;margin-bottom:-2px;transition:all .2s}
@@ -389,6 +419,7 @@ html,body{height:100%;font-family:'Lato',sans-serif;background:var(--sand);color
           <button class="admin-save-btn" id="admin-save-btn" onclick="saveAllAdminChanges()">💾 Sauvegarder</button>
         </div>
         <input type="file" id="backup-import-input" accept="application/json,.json" style="display:none" onchange="importBackupFile(this.files?.[0]);this.value=''">
+        <button class="topbar-btn notification-btn" onclick="openNotificationCenter()" title="Notifications">🔔<span class="notification-count" id="notification-count">0</span></button>
         <button class="topbar-btn" onclick="doLogout()" title="Déconnexion">🚪</button>
       </div>
     </div>
@@ -401,7 +432,10 @@ html,body{height:100%;font-family:'Lato',sans-serif;background:var(--sand);color
         <span class="order-total-label">Total sélectionné</span>
         <span class="order-total" id="footer-total">$0</span>
       </div>
-      <button class="btn" onclick="openCheckout()">Passer commande →</button>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <button class="btn-outline" onclick="saveDraft()">💾 Brouillon</button>
+        <button class="btn" onclick="openCheckout()">Passer commande →</button>
+      </div>
     </div>
   </div>
 </div>
@@ -462,6 +496,26 @@ html,body{height:100%;font-family:'Lato',sans-serif;background:var(--sand);color
   </div>
 </div>
 
+<div class="modal-overlay" id="notification-modal">
+  <div class="modal" style="max-width:620px">
+    <div class="modal-header">
+      <h2 class="modal-title">🔔 Centre de notifications</h2>
+      <button class="modal-close" onclick="closeModal('notification-modal')">✕</button>
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:.8rem"><button class="btn-outline btn-sm" onclick="markAllNotificationsRead()">Tout marquer comme lu</button></div>
+    <div class="notification-list" id="notification-list"></div>
+  </div>
+</div>
+
+<div class="announcement-overlay" id="announcement-overlay">
+  <div class="announcement-page">
+    <div style="font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--text-muted)">Message de la direction</div>
+    <h2 id="announcement-title">Annonce LTD Sandy Shores</h2>
+    <div class="announcement-message" id="announcement-message"></div>
+    <div class="announcement-confirm"><button class="btn" id="announcement-confirm-btn">J'ai lu et je valide</button></div>
+  </div>
+</div>
+
 <div class="warn-overlay" id="warn-overlay">
   <div class="warn-box">
     <div class="warn-icon">⚠️</div>
@@ -498,6 +552,10 @@ let products=[];
 let categories=[];
 let performanceSettings={weeklyCA:0,monthlyCA:0,productGoals:{}};
 let weeklyReports=[];
+let notifications=[];
+let announcements=[];
+let directionLog=[];
+let trash=[];
 
 const FULL_CACHE_KEY='ltd_full_data_v2';
 const ADMIN_DIRTY_KEY='ltd_admin_unsaved_v1';
@@ -560,7 +618,7 @@ async function saveAllAdminChanges(opts={}){
 }
 
 function snapshotState(){
-  return {schemaVersion:4,revision:dataRevision,orders,companies,products,categories,performanceSettings,weeklyReports,updatedAt:dataUpdatedAt||Date.now()};
+  return {schemaVersion:5,revision:dataRevision,orders,companies,products,categories,performanceSettings,weeklyReports,notifications,announcements,directionLog,trash,updatedAt:dataUpdatedAt||Date.now()};
 }
 function saveFullLocal(){
   try{
@@ -584,6 +642,10 @@ function applyState(d){
   performanceSettings=d.performanceSettings&&typeof d.performanceSettings==='object'?d.performanceSettings:performanceSettings;
   performanceSettings.productGoals=performanceSettings.productGoals&&typeof performanceSettings.productGoals==='object'?performanceSettings.productGoals:{};
   weeklyReports=Array.isArray(d.weeklyReports)?d.weeklyReports:weeklyReports;
+  notifications=Array.isArray(d.notifications)?d.notifications:notifications;
+  announcements=Array.isArray(d.announcements)?d.announcements:announcements;
+  directionLog=Array.isArray(d.directionLog)?d.directionLog:directionLog;
+  trash=Array.isArray(d.trash)?d.trash:trash;
   dataUpdatedAt=Number(d.updatedAt||d._updatedAt||0)||dataUpdatedAt;
   dataRevision=Number(d.revision||0)||dataRevision;
 }
@@ -1241,6 +1303,161 @@ function deleteContact(i){
     curCo=companies[idx];
     pushToServer();renderEnterprise(document.getElementById('main-content'));showToast('✅ Contact supprimé');
   });
+}
+
+// ═══ NOTIFICATIONS / BROUILLONS / FAVORIS / ANNONCES / JOURNAL / CORBEILLE ═══
+function uid(prefix='id'){return prefix+'_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,7)}
+function escHtml(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+function viewerKey(){return mode==='company'&&curCo?'co:'+curCo.id:'admin:'+String(curAdmRole||'')}
+function notificationVisible(n){
+  if(!n)return false;
+  if(mode==='admin')return n.audience==='admin'||n.audience==='all';
+  if(mode==='company'&&curCo)return n.audience==='all'||(n.audience==='company'&&(n.companyIds||[]).includes(curCo.id));
+  return false;
+}
+function visibleNotifications(){return notifications.filter(notificationVisible).sort((a,b)=>Number(b.createdTs||0)-Number(a.createdTs||0))}
+function addSiteNotification(title,message,opts={}){
+  notifications.push({
+    id:uid('notif'),title,message,type:opts.type||'info',audience:opts.audience||'admin',
+    companyIds:Array.isArray(opts.companyIds)?opts.companyIds:[],createdTs:Date.now(),readBy:[]
+  });
+  if(notifications.length>250)notifications=notifications.slice(-250);
+  updateNotificationBadge();
+}
+function updateNotificationBadge(){
+  const badge=document.getElementById('notification-count');if(!badge)return;
+  const key=viewerKey();
+  const count=visibleNotifications().filter(n=>!(n.readBy||[]).includes(key)).length;
+  badge.textContent=count>99?'99+':String(count);
+  badge.classList.toggle('show',count>0);
+}
+function openNotificationCenter(){
+  const list=document.getElementById('notification-list');if(!list)return;
+  const key=viewerKey(),items=visibleNotifications();
+  list.innerHTML=items.length?items.map(n=>`<div class="notification-item ${(n.readBy||[]).includes(key)?'':'unread'}" onclick="markNotificationRead('${n.id}')">
+    <div class="notification-item-title">${escHtml(n.title||'Notification')}</div>
+    <div class="notification-item-msg">${escHtml(n.message||'')}</div>
+    <div class="notification-item-date">${new Date(Number(n.createdTs||Date.now())).toLocaleString('fr-FR')}</div>
+  </div>`).join(''):'<div class="empty">Aucune notification.</div>';
+  document.getElementById('notification-modal').classList.add('open');
+}
+function markNotificationRead(id){
+  const n=notifications.find(x=>x.id===id);if(!n)return;
+  n.readBy=n.readBy||[];const key=viewerKey();if(!n.readBy.includes(key))n.readBy.push(key);
+  if(mode==='admin')markAdminDirty();else pushToServer();
+  updateNotificationBadge();openNotificationCenter();
+}
+function markAllNotificationsRead(){
+  const key=viewerKey();visibleNotifications().forEach(n=>{n.readBy=n.readBy||[];if(!n.readBy.includes(key))n.readBy.push(key)});
+  if(mode==='admin')markAdminDirty();else pushToServer();
+  updateNotificationBadge();openNotificationCenter();
+}
+function addDirectionLog(action,details=''){
+  directionLog.push({id:uid('log'),action,details,actor:curAdmRole||'Système',createdTs:Date.now()});
+  if(directionLog.length>500)directionLog=directionLog.slice(-500);
+}
+function moveToTrash(type,item,label){
+  trash.push({id:uid('trash'),type,label:label||item?.name||item?.id||type,data:JSON.parse(JSON.stringify(item)),deletedTs:Date.now(),deletedBy:curAdmRole||'Direction'});
+  if(trash.length>300)trash=trash.slice(-300);
+}
+function restoreTrash(id){
+  const i=trash.findIndex(x=>x.id===id);if(i<0)return;
+  const t=trash[i];
+  if(t.type==='company'&&!companies.some(x=>x.id===t.data.id))companies.push(t.data);
+  else if(t.type==='product'&&!products.some(x=>x.id===t.data.id))products.push(t.data);
+  else if(t.type==='order'&&!orders.some(x=>x.id===t.data.id))orders.push(t.data);
+  else if(t.type==='category'&&!categories.some(x=>x.name===t.data.name))categories.push(t.data);
+  else{showToast('⚠ Élément déjà présent');return}
+  trash.splice(i,1);addDirectionLog('Restauration depuis la corbeille',t.type+' · '+t.label);markAdminDirty();renderTrash(document.getElementById('main-content'));showToast('✅ Élément restauré');
+}
+function purgeTrash(id){
+  const i=trash.findIndex(x=>x.id===id);if(i<0)return;
+  const t=trash[i];showWarn('Supprimer définitivement « '+t.label+' » ?',()=>{trash.splice(i,1);addDirectionLog('Suppression définitive',t.type+' · '+t.label);markAdminDirty();renderTrash(document.getElementById('main-content'))},'Supprimer');
+}
+function renderTrash(container){
+  container.innerHTML=`<div class="panel-card"><h3>🗑 Corbeille</h3><div style="font-size:11px;color:var(--text-muted);margin-bottom:.8rem">Les commandes, produits et entreprises supprimés peuvent être restaurés ici.</div>
+  ${[...trash].reverse().map(t=>`<div class="trash-row"><span>${new Date(t.deletedTs).toLocaleString('fr-FR')}</span><strong>${escHtml(t.type)}</strong><span>${escHtml(t.label)}</span><span><button class="btn-outline btn-sm" onclick="restoreTrash('${t.id}')">Restaurer</button> <button class="btn-danger btn-sm" onclick="purgeTrash('${t.id}')">Définitif</button></span></div>`).join('')||'<div class="empty">La corbeille est vide.</div>'}</div>`;
+}
+function renderDirectionLog(container){
+  const rows=[...directionLog].reverse();
+  container.innerHTML=`<div class="panel-card"><h3>📖 Journal Direction</h3><div style="font-size:11px;color:var(--text-muted);margin-bottom:.8rem">Historique des actions importantes effectuées sur le site.</div>
+  ${rows.map(l=>`<div class="log-row"><span>${new Date(l.createdTs).toLocaleString('fr-FR')}</span><strong>${escHtml(l.actor)}</strong><span><b>${escHtml(l.action)}</b><br><small>${escHtml(l.details||'')}</small></span><span></span></div>`).join('')||'<div class="empty">Aucune action enregistrée.</div>'}</div>`;
+}
+function saveDraft(){
+  if(mode!=='company'||!curCo)return;
+  if(!Object.values(qty).some(v=>Number(v)>0)){showToast('⚠ Ton panier est vide');return}
+  const idx=companies.findIndex(c=>c.id===curCo.id);if(idx<0)return;
+  companies[idx].draft={qty:{...qty},updatedTs:Date.now()};
+  curCo={...companies[idx]};pushToServer();showToast('💾 Brouillon sauvegardé');
+}
+function loadDraft(){
+  const fresh=companies.find(c=>c.id===curCo.id);if(!fresh?.draft?.qty)return;
+  qty={...fresh.draft.qty};renderCatalogue(document.getElementById('main-content'));showToast('📋 Brouillon chargé');
+}
+function deleteDraft(){
+  const idx=companies.findIndex(c=>c.id===curCo.id);if(idx<0)return;
+  delete companies[idx].draft;curCo={...companies[idx]};pushToServer();renderCatalogue(document.getElementById('main-content'));showToast('🗑 Brouillon supprimé');
+}
+function toggleFavorite(pid){
+  if(mode!=='company'||!curCo)return;
+  const idx=companies.findIndex(c=>c.id===curCo.id);if(idx<0)return;
+  companies[idx].favorites=Array.isArray(companies[idx].favorites)?companies[idx].favorites:[];
+  const p=companies[idx].favorites.indexOf(pid);
+  if(p>=0)companies[idx].favorites.splice(p,1);else companies[idx].favorites.push(pid);
+  curCo={...companies[idx]};pushToServer();renderCatalogue(document.getElementById('main-content'));
+}
+function targetedAnnouncements(){
+  if(!curCo)return[];
+  return announcements.filter(a=>a.active!==false&&(a.targetAll||(a.companyIds||[]).includes(curCo.id))&&!(a.ackBy||[]).includes(curCo.id)).sort((a,b)=>Number(a.createdTs)-Number(b.createdTs));
+}
+function showNextAnnouncement(){
+  if(mode!=='company'||!curCo)return;
+  const a=targetedAnnouncements()[0];if(!a)return;
+  document.getElementById('announcement-title').textContent=a.title||'Annonce LTD Sandy Shores';
+  document.getElementById('announcement-message').textContent=a.message||'';
+  document.getElementById('announcement-confirm-btn').onclick=()=>ackAnnouncement(a.id);
+  document.getElementById('announcement-overlay').classList.add('open');
+}
+function ackAnnouncement(id){
+  const a=announcements.find(x=>x.id===id);if(!a)return;
+  a.ackBy=Array.isArray(a.ackBy)?a.ackBy:[];if(!a.ackBy.includes(curCo.id))a.ackBy.push(curCo.id);
+  document.getElementById('announcement-overlay').classList.remove('open');pushToServer();setTimeout(showNextAnnouncement,200);
+}
+function renderAnnouncementsAdmin(container){
+  container.innerHTML=`<div class="admin-grid-2">
+    <div class="panel-card">
+      <h3>📣 Nouvelle annonce client</h3>
+      <label class="form-label">Titre</label><input class="form-input" id="ann-title" placeholder="Information importante">
+      <label class="form-label" style="margin-top:.7rem">Message</label><textarea class="form-input form-textarea" id="ann-message" placeholder="Écris l'annonce qui s'affichera après la connexion..."></textarea>
+      <label class="check-row" style="margin:.8rem 0"><input type="checkbox" id="ann-all" checked onchange="toggleAnnouncementTargets()"> Envoyer à toutes les entreprises</label>
+      <div class="check-list" id="ann-targets">${companies.map(c=>`<label class="check-row"><input type="checkbox" class="ann-co" value="${c.id}" disabled> ${escHtml(c.name)}</label>`).join('')}</div>
+      <button class="btn" style="margin-top:1rem" onclick="createAnnouncement()">Publier l'annonce</button>
+    </div>
+    <div class="panel-card">
+      <h3>Annonces publiées</h3>
+      <div id="ann-list">${[...announcements].reverse().map(a=>`<div class="notification-item"><div class="notification-item-title">${escHtml(a.title)}</div><div class="notification-item-msg">${escHtml(a.message)}</div><div class="notification-item-date">${a.targetAll?'Tout le monde':(a.companyIds||[]).length+' entreprise(s)'} · ${(a.ackBy||[]).length} validation(s)</div><div style="margin-top:.5rem"><button class="btn-danger btn-sm" onclick="deleteAnnouncement('${a.id}')">Supprimer</button></div></div>`).join('')||'<div class="empty">Aucune annonce.</div>'}</div>
+    </div>
+  </div>`;
+}
+function toggleAnnouncementTargets(){
+  const all=document.getElementById('ann-all')?.checked;
+  document.querySelectorAll('.ann-co').forEach(x=>x.disabled=all);
+}
+function createAnnouncement(){
+  const title=document.getElementById('ann-title')?.value.trim(),message=document.getElementById('ann-message')?.value.trim();
+  if(!title||!message){showToast('⚠ Titre et message requis');return}
+  const targetAll=Boolean(document.getElementById('ann-all')?.checked);
+  const companyIds=targetAll?[]:[...document.querySelectorAll('.ann-co:checked')].map(x=>x.value);
+  if(!targetAll&&!companyIds.length){showToast('⚠ Choisis au moins une entreprise');return}
+  const a={id:uid('ann'),title,message,targetAll,companyIds,ackBy:[],active:true,createdTs:Date.now(),createdBy:curAdmRole||'Direction'};
+  announcements.push(a);
+  addDirectionLog('Annonce publiée',title+' · '+(targetAll?'Toutes les entreprises':companyIds.length+' entreprise(s)'));
+  addSiteNotification('Nouvelle annonce',title,{audience:targetAll?'all':'company',companyIds});
+  markAdminDirty();renderAnnouncementsAdmin(document.getElementById('main-content'));showToast('✅ Annonce publiée');
+}
+function deleteAnnouncement(id){
+  const i=announcements.findIndex(a=>a.id===id);if(i<0)return;
+  showWarn('Supprimer cette annonce ?',()=>{const a=announcements[i];announcements.splice(i,1);addDirectionLog('Annonce supprimée',a.title);markAdminDirty();renderAnnouncementsAdmin(document.getElementById('main-content'))});
 }
 
 // ═══ ADMIN APP ═══
