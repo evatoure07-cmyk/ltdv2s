@@ -2129,8 +2129,18 @@ function startRealtime(){
           return;
         }
 
+        if(data.type==='notification' && data.notification){
+          if(!notifications.some(n=>n.id===data.notification.id)) notifications.push(data.notification);
+          updateNotificationBadge();
+          if(notificationVisible(data.notification)) showToast(data.notification.title+' — '+data.notification.message,3500);
+          return;
+        }
+
         if(data.type==='data_updated'){
-          syncFromServer();
+          syncFromServer().then(()=>{
+            updateNotificationBadge();
+            if(mode==='company') showNextAnnouncement();
+          });
         }
       }catch(e){console.error('Realtime event',e)}
     });
@@ -2176,11 +2186,19 @@ async function syncFromServer(){
       const active=document.querySelector('.nav-item.active')?.id||'';
       if(active==='nav-hist') renderHistory(document.getElementById('main-content'));
       if(active==='nav-cmd') renderCatalogue(document.getElementById('main-content'));
+      if(active==='nav-ent') renderEnterprise(document.getElementById('main-content'));
+      updateNotificationBadge();
+      showNextAnnouncement();
     } else if(mode==='admin'){
       const active=document.querySelector('.nav-item.active')?.id||'';
       if(active==='nav-aorders') renderAdminOrders(document.getElementById('main-content'));
-      if(active==='nav-aprod') renderAdminProducts(document.getElementById('main-content'));
-      if(active==='nav-aco') renderAdminCompanies(document.getElementById('main-content'));
+      if(active==='nav-aprods') renderAdminProducts(document.getElementById('main-content'));
+      if(active==='nav-acos') renderAdminCompanies(document.getElementById('main-content'));
+      if(active==='nav-aann') renderAnnouncementsAdmin(document.getElementById('main-content'));
+      if(active==='nav-alog') renderDirectionLog(document.getElementById('main-content'));
+      if(active==='nav-atrash') renderTrash(document.getElementById('main-content'));
+      if(active==='nav-aperf') renderPerformance(document.getElementById('main-content'));
+      updateNotificationBadge();
     }
   }catch(e){}
 }
