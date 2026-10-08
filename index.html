@@ -972,6 +972,8 @@ function doAdmLogin(){
 function doLogout(){
   mode=null;curCo=null;curAdmRole=null;qty={};
   sessionStorage.removeItem('ltd_session');
+  document.getElementById('announcement-overlay')?.classList.remove('open');
+  document.getElementById('notification-modal')?.classList.remove('open');
   document.getElementById('app').classList.remove('visible');
   document.getElementById('login-screen').style.display='flex';
 }
@@ -1002,6 +1004,8 @@ function setupCompanyApp(){
   ];
   renderSidebar(nav,'cmd');
   showCompanyPanel('cmd');
+  updateNotificationBadge();
+  setTimeout(showNextAnnouncement,250);
 }
 
 function renderSidebar(items,activeId){
@@ -1037,8 +1041,11 @@ function getPrice(pid){
 }
 
 function renderCatalogue(container){
+  const fresh=companies.find(c=>c.id===curCo?.id)||curCo||{};
+  const favorites=Array.isArray(fresh.favorites)?fresh.favorites:[];
+  const draft=fresh.draft?.qty&&Object.values(fresh.draft.qty).some(v=>Number(v)>0)?fresh.draft:null;
   const cats=[...new Set(products.map(p=>p.cat||'Divers'))];
-  container.innerHTML=`<div id="cat-container">${cats.map(cat=>{
+  container.innerHTML=`${draft?`<div class="draft-banner"><div><strong>📋 Brouillon disponible</strong><div style="font-size:10px;color:var(--text-muted);margin-top:.2rem">Sauvegardé ${new Date(draft.updatedTs||Date.now()).toLocaleString('fr-FR')}</div></div><div class="draft-actions"><button class="btn btn-sm" onclick="loadDraft()">Charger</button><button class="btn-outline btn-sm" onclick="deleteDraft()">Supprimer</button></div></div>`:''}<div id="cat-container">${cats.map(cat=>{
     const ps=products.filter(p=>(p.cat||'Divers')===cat);
     return `<div class="cat-section">
       <div class="cat-title">${getCategoryIcon(cat)} ${cat}</div>
@@ -1046,7 +1053,9 @@ function renderCatalogue(container){
         const price=getPrice(p.id);
         const isCustom=curCo?.customPrices?.[p.id]!==undefined;
         const isStock=p.destockage;
+        const isFav=favorites.includes(p.id);
         return `<div class="product-card ${isStock?'destockage':''}" id="card-${p.id}">
+          <button class="favorite-btn ${isFav?'active':''}" onclick="event.stopPropagation();toggleFavorite('${p.id}')" title="${isFav?'Retirer des favoris':'Ajouter aux favoris'}">${isFav?'⭐':'☆'}</button>
           <div class="product-card-img">${p.icon}</div>
           <div class="product-card-name">${p.name}</div>
           ${isCustom?'<div class="product-card-custom-label">Prix négocié</div>':''}
@@ -1118,7 +1127,7 @@ async function submitOrder(){
     products:prods.map(p=>({id:p.id,name:p.name,qty:qty[p.id],price:getPrice(p.id)})),
     total:finalTotal,freeDelivery:free,weight:getWeight().toFixed(2),
     status:'awaiting_payment',createdAt:new Date().toLocaleDateString('fr-FR'),createdTs:Date.now(),
-    statusHistory:[{status:'awaiting_payment',date:new Date().toLocaleDateString('fr-FR')}]
+    statusHistory:[{status:'awaiting_payment',date:new Date().toLocaleDateString('fr-FR'),time:new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}),ts:Date.now()}]
   };
   orders.push(order);
   localStorage.setItem('ltd_orders_cache',JSON.stringify(orders));
@@ -1134,6 +1143,8 @@ async function submitOrder(){
     if(!discordOk) errorMsg=result.discord?.error||'Webhook Discord non envoyé';
   }catch(e){ errorMsg=e.message||'Erreur serveur'; }
   closeModal('checkout-modal');
+  const coIdx=companies.findIndex(c=>c.id===curCo.id);
+  if(coIdx>=0&&companies[coIdx].draft){delete companies[coIdx].draft;curCo={...companies[coIdx]};pushToServer();}
   qty={};
   if(saved&&discordOk) showToast('✅ Commande '+id+' enregistrée et envoyée sur Discord !',3500);
   else if(saved) showToast('⚠️ Commande enregistrée, mais Discord a échoué : '+errorMsg,5000);
@@ -1472,10 +1483,14 @@ function setupAdminApp(){
     {id:'acos',icon:'🏢',label:'Entreprises'},
     {id:'ainfo',icon:'ℹ️',label:'Infos entreprises'},
     {id:'aperf',icon:'📊',label:'Comptabilité & Performance'},
+    {id:'aann',icon:'📣',label:'Annonces clients'},
+    {id:'alog',icon:'📖',label:'Journal Direction'},
+    {id:'atrash',icon:'🗑',label:'Corbeille'},
     {id:'gsheet',icon:'↗',label:'Google Sheet'},
   ];
   renderSidebar(nav,'aorders');
   showAdminPanel('aorders');
+  updateNotificationBadge();
   if(migrationPending){
     setTimeout(()=>showToast('☁ Vos entreprises et mots de passe sont conservés. Migration automatique vers Supabase en cours…',6500),250);
   }
@@ -1489,6 +1504,9 @@ function showAdminPanel(id){
   else if(id==='acos'){setTopbar('Entreprises','Administration');renderAdminCompanies(content)}
   else if(id==='ainfo'){setTopbar('Infos entreprises','Administration');renderAdminInfo(content)}
   else if(id==='aperf'){setTopbar('Comptabilité & Performance','Direction');renderPerformance(content)}
+  else if(id==='aann'){setTopbar('Annonces clients','Direction');renderAnnouncementsAdmin(content)}
+  else if(id==='alog'){setTopbar('Journal Direction','Direction');renderDirectionLog(content)}
+  else if(id==='atrash'){setTopbar('Corbeille','Direction');renderTrash(content)}
   else if(id==='gsheet'){
     window.open('https://docs.google.com/spreadsheets/d/1C-pUT6rwR5ZA7o-XTfGm1pcZXRarKmAGKjwaU28mxOM/edit','_blank','noopener,noreferrer');
     document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
