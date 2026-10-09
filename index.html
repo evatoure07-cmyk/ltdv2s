@@ -635,7 +635,7 @@ function readFullLocal(){
 }
 function applyState(d){
   if(!d||typeof d!=='object')return;
-  orders=Array.isArray(d.orders)?d.orders:orders;
+  orders=(Array.isArray(d.orders)?d.orders:orders).map(o=>{const order={...o};if(!order.status||order.status==='pending'||order.status==='awaiting_payment')order.status='validated';order.statusHistory=(Array.isArray(order.statusHistory)?order.statusHistory:[]).map(h=>({...h,status:(!h?.status||h.status==='pending'||h.status==='awaiting_payment')?'validated':h.status}));return order;});
   companies=Array.isArray(d.companies)?d.companies:companies;
   products=Array.isArray(d.products)?d.products:products;
   categories=Array.isArray(d.categories)?d.categories:categories;
@@ -1126,8 +1126,8 @@ async function submitOrder(){
     date:date?new Date(date).toLocaleDateString('fr-FR'):'—',horaire:horaire||'—',
     products:prods.map(p=>({id:p.id,name:p.name,qty:qty[p.id],price:getPrice(p.id)})),
     total:finalTotal,freeDelivery:free,weight:getWeight().toFixed(2),
-    status:'awaiting_payment',createdAt:new Date().toLocaleDateString('fr-FR'),createdTs:Date.now(),
-    statusHistory:[{status:'awaiting_payment',date:new Date().toLocaleDateString('fr-FR'),time:new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}),ts:Date.now()}]
+    status:'validated',createdAt:new Date().toLocaleDateString('fr-FR'),createdTs:Date.now(),
+    statusHistory:[{status:'validated',date:new Date().toLocaleDateString('fr-FR'),time:new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}),ts:Date.now()}]
   };
   orders.push(order);
   localStorage.setItem('ltd_orders_cache',JSON.stringify(orders));
@@ -1155,10 +1155,10 @@ async function submitOrder(){
 }
 
 // ═══ HISTORY ═══
-const STATUS_STEPS=['awaiting_payment','ready','done'];
-const STATUS_LABELS={pending:'En attente de paiement',awaiting_payment:'En attente de paiement',missing:'Manque des choses',validated:'Manque des choses',ready:'Commande prête dans son coffre',done:'Livré',refused:'Refusé',cancel:'Refusé'};
-const STATUS_ICONS={pending:'💵',awaiting_payment:'💵',missing:'🟠',validated:'🟠',ready:'🟡',done:'🟢',refused:'🔴',cancel:'🔴'};
-const STATUS_BADGE={pending:'sbadge-ready',awaiting_payment:'sbadge-ready',missing:'sbadge-pending',validated:'sbadge-pending',ready:'sbadge-ready',done:'sbadge-done',refused:'sbadge-cancel',cancel:'sbadge-cancel'};
+const STATUS_STEPS=['validated','ready','done'];
+const STATUS_LABELS={validated:'Commande validée',missing:'Manque des choses',ready:'Commande prête dans son coffre',done:'Livré',refused:'Refusé',cancel:'Refusé'};
+const STATUS_ICONS={validated:'✅',missing:'🟠',ready:'🟡',done:'🟢',refused:'🔴',cancel:'🔴'};
+const STATUS_BADGE={validated:'sbadge-done',missing:'sbadge-pending',ready:'sbadge-ready',done:'sbadge-done',refused:'sbadge-cancel',cancel:'sbadge-cancel'};
 
 function renderHistory(container){
   // Filter orders for this company from server
@@ -1649,7 +1649,7 @@ function renderPerformance(container){
 // ═══ ADMIN ORDERS ═══
 function renderAdminOrders(container){
   const ca=orders.filter(o=>o.status!=='cancel').reduce((s,o)=>s+o.total,0);
-  const pending=orders.filter(o=>['pending','awaiting_payment','missing','validated'].includes(o.status)).length;
+  const pending=orders.filter(o=>['validated','missing','ready'].includes(o.status)).length;
   const done=orders.filter(o=>o.status==='done').length;
   container.innerHTML=`
     <div class="panel-card" style="margin-bottom:1rem">
@@ -1669,7 +1669,7 @@ function renderAdminOrders(container){
       <input class="search-box" type="text" placeholder="🔍 Rechercher..." id="ao-search" oninput="filterAdminOrders()">
       <select class="filter-sel" id="ao-status" onchange="filterAdminOrders()">
         <option value="">Tous statuts</option>
-        <option value="awaiting_payment">💵 En attente de paiement</option>
+        <option value="validated">✅ Commande validée</option>
         <option value="missing">🟠 Manque des choses</option>
         <option value="ready">🟡 Commande prête dans son coffre</option>
         <option value="done">🟢 Livré</option>
@@ -1734,7 +1734,7 @@ function openOrderDetail(id){
     <div style="margin-top:1rem">
       <label class="form-label">Changer le statut</label>
       <select class="status-select" id="odm-status-sel">
-        ${['awaiting_payment','missing','ready','done','refused'].map(s=>`<option value="${s}" ${o.status===s?'selected':''}>${STATUS_ICONS[s]} ${STATUS_LABELS[s]}</option>`).join('')}
+        ${['validated','missing','ready','done','refused'].map(s=>`<option value="${s}" ${o.status===s?'selected':''}>${STATUS_ICONS[s]} ${STATUS_LABELS[s]}</option>`).join('')}
       </select>
     </div>`;
   document.getElementById('odm-actions').innerHTML=`
