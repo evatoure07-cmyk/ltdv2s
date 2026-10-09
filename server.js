@@ -62,13 +62,22 @@ function emptyData() {
 
 function normalizeData(input) {
   const src = input && typeof input === 'object' ? input : {};
+  const orders = (Array.isArray(src.orders) ? src.orders : []).map(raw => {
+    const order = { ...raw };
+    if (!order.status || order.status === 'pending' || order.status === 'awaiting_payment') order.status = 'validated';
+    order.statusHistory = (Array.isArray(order.statusHistory) ? order.statusHistory : []).map(h => ({
+      ...h,
+      status: (!h?.status || h.status === 'pending' || h.status === 'awaiting_payment') ? 'validated' : h.status
+    }));
+    return order;
+  });
   return {
     ...emptyData(),
     ...src,
-    schemaVersion: 5,
+    schemaVersion: 6,
     revision: Number(src.revision || 0) || 0,
     updatedAt: Number(src.updatedAt || src._updatedAt || 0) || 0,
-    orders: Array.isArray(src.orders) ? src.orders : [],
+    orders,
     companies: Array.isArray(src.companies) ? src.companies : [],
     products: Array.isArray(src.products) ? src.products : [],
     categories: Array.isArray(src.categories) ? src.categories : []
@@ -214,17 +223,15 @@ async function persistData(input) {
 
 
 const DISCORD_STATUS = {
-  awaiting_payment: { emoji: '💵', label: 'En attente de paiement', color: 0xC9A84C },
+  validated: { emoji: '✅', label: 'Commande validée', color: 0x22C55E },
   missing: { emoji: '🟠', label: 'Manque des choses', color: 0xD97706 },
   ready: { emoji: '🟡', label: 'Commande prête dans son coffre', color: 0xEAB308 },
   done: { emoji: '🟢', label: 'Livré', color: 0x16A34A },
   refused: { emoji: '🔴', label: 'Refusé', color: 0xDC2626 },
-  pending: { emoji: '💵', label: 'En attente de paiement', color: 0xC9A84C },
-  validated: { emoji: '🟠', label: 'Manque des choses', color: 0xD97706 },
   cancel: { emoji: '🔴', label: 'Refusé', color: 0xDC2626 }
 };
 const REACTION_TO_STATUS = new Map([
-  ['💵','awaiting_payment'],
+  ['✅','validated'],
   ['🟠','missing'],
   ['🟡','ready'],
   ['🟢','done'],
@@ -236,7 +243,7 @@ let discordReadyResolve = null;
 const discordReadyPromise = new Promise(resolve => { discordReadyResolve = resolve; });
 
 function discordStatusMeta(status) {
-  return DISCORD_STATUS[status] || DISCORD_STATUS.awaiting_payment;
+  return DISCORD_STATUS[status] || DISCORD_STATUS.validated;
 }
 function safeThreadName(order, status) {
   const meta = discordStatusMeta(status);
@@ -321,7 +328,7 @@ async function checkDelayedOrders() {
     const now = Date.now();
     let changed = false;
     for (const order of current.orders) {
-      if (!['awaiting_payment','missing','ready'].includes(String(order.status || ''))) continue;
+      if (!['validated','missing','ready'].includes(String(order.status || ''))) continue;
       const ageMin = Math.floor((now - latestOrderActivityTs(order)) / 60000);
       if (ageMin < DELAY_ALERT_MINUTES) continue;
       if (order.delayAlert?.status === order.status) continue;
@@ -429,7 +436,7 @@ async function setupDiscordThread(order, webhookMessage) {
 
   // Fallback principal : les réactions du message de commande fonctionnent même si Discord refuse la création du fil.
   let reactionsAdded = true;
-  for (const emoji of ['🔴','🟠','🟡','🟢','💵']) {
+  for (const emoji of ['✅','🟠','🟡','🟢','🔴']) {
     const ok = await starter.react(emoji).then(() => true).catch(e => {
       console.error('Discord reaction add failed:', emoji, e.message);
       return false;
@@ -439,7 +446,7 @@ async function setupDiscordThread(order, webhookMessage) {
 
   try {
     const thread = await starter.startThread({
-      name: safeThreadName(order, order.status || 'awaiting_payment'),
+      name: safeThreadName(order, order.status || 'validated'),
       autoArchiveDuration: 1440,
       reason: `Commande ${order.id}`
     });
@@ -448,14 +455,14 @@ async function setupDiscordThread(order, webhookMessage) {
       content:
         `**Pilotage de la commande ${order.id}**\n` +
         `Réagis ici ou directement sur le message principal :\n` +
-        `🔴 = Refusé\n` +
+        `✅ = Commande validée\n` +
         `🟠 = Manque des choses\n` +
         `🟡 = Commande prête dans son coffre\n` +
         `🟢 = Livré\n` +
-        `💵 = En attente de paiement`
+        `🔴 = Refusé`
     });
 
-    for (const emoji of ['🔴','🟠','🟡','🟢','💵']) {
+    for (const emoji of ['✅','🟠','🟡','🟢','🔴']) {
       await control.react(emoji).catch(() => {});
     }
 
@@ -543,7 +550,7 @@ async function sendDiscord(order) {
   const prodLines = (order.products || [])
     .map(p => `> **${p.name}** — ${p.qty} × $${p.price} = **$${p.qty * p.price}**`)
     .join('\n').slice(0, 1000) || '—';
-  const meta = discordStatusMeta(order.status || 'awaiting_payment');
+  const meta = discordStatusMeta(order.status || 'validated');
   const embed = {
     username: 'Maritza · LTD Sandy Shores',
     embeds: [{
@@ -638,7 +645,7 @@ app.post('/api/orders', async (req, res) => {
     if (!order || !order.id || !order.company || !Array.isArray(order.products)) {
       return res.status(400).json({ ok: false, error: 'Commande invalide' });
     }
-    if (!order.status || order.status === 'pending') order.status = 'awaiting_payment';
+    if (!order.status || order.status === 'pending' || order.status === 'awaiting_payment') order.status = 'validated';
     order.statusHistory = Array.isArray(order.statusHistory) ? order.statusHistory : [];
     if (!order.statusHistory.length || order.statusHistory[order.statusHistory.length - 1]?.status !== order.status) {
       order.statusHistory.push({
@@ -694,7 +701,7 @@ app.post('/api/notify', async (req, res) => {
 app.post('/api/discord/status', async (req, res) => {
   try {
     const { orderId, status, reason } = req.body || {};
-    const allowed = ['pending','awaiting_payment','missing','validated','ready','done','refused','cancel'];
+    const allowed = ['validated','missing','ready','done','refused','cancel'];
     if (!orderId || !allowed.includes(status)) {
       return res.status(400).json({ ok: false, error: 'Statut invalide' });
     }
