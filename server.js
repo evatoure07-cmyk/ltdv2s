@@ -238,6 +238,44 @@ const REACTION_TO_STATUS = new Map([
   ['🔴','refused']
 ]);
 
+const DISCORD_REACTIONS = ['✅','🟠','🟡','🟢','🔴'];
+
+function discordControlText(orderId) {
+  return `**Pilotage de la commande ${orderId}**\n` +
+    `Réagis ici ou directement sur le message principal :\n` +
+    `✅ = Commande validée\n` +
+    `🟠 = Manque des choses\n` +
+    `🟡 = Commande prête dans son coffre\n` +
+    `🟢 = Livré\n` +
+    `🔴 = Refusé`;
+}
+
+function discordOrderEmbed(order) {
+  const prodLines = (order.products || [])
+    .map(p => `> **${p.name}** — ${p.qty} × $${p.price} = **$${p.qty * p.price}**`)
+    .join('\n').slice(0, 1000) || '—';
+  const meta = discordStatusMeta(order.status || 'validated');
+  return {
+    title: `${meta.emoji} Nouvelle commande — ${order.id}`,
+    color: meta.color,
+    fields: [
+      { name: '🏢 Entreprise', value: String(order.company || '—').slice(0, 1024), inline: true },
+      { name: '📞 Téléphone', value: String(order.tel || '—').slice(0, 1024), inline: true },
+      { name: '🏦 IBAN', value: '||' + String(order.iban || '—').slice(0, 1000) + '||', inline: true },
+      { name: '📦 Produits', value: prodLines, inline: false },
+      { name: '⚖️ Poids', value: String(order.weight || 0) + ' kg', inline: true },
+      { name: '🚚 Livraison', value: order.freeDelivery ? '✅ Offerte' : '$50', inline: true },
+      { name: '💰 Total', value: '**$' + Number(order.total || 0).toLocaleString('fr-FR') + '**', inline: true },
+      { name: '📍 Adresse', value: String(order.adresse || '—').slice(0, 1024), inline: false },
+      { name: '📅 Date', value: String(order.date || '—'), inline: true },
+      { name: '🕐 Horaire', value: String(order.horaire || '—'), inline: true },
+      { name: '📌 Statut', value: `${meta.emoji} **${meta.label}**`, inline: false }
+    ],
+    footer: { text: 'LTD Sandy Shores · Commandes' },
+    timestamp: new Date(Number(order.createdTs || Date.now())).toISOString()
+  };
+}
+
 let discordClient = null;
 let discordReadyResolve = null;
 const discordReadyPromise = new Promise(resolve => { discordReadyResolve = resolve; });
@@ -436,7 +474,7 @@ async function setupDiscordThread(order, webhookMessage) {
 
   // Fallback principal : les réactions du message de commande fonctionnent même si Discord refuse la création du fil.
   let reactionsAdded = true;
-  for (const emoji of ['✅','🟠','🟡','🟢','🔴']) {
+  for (const emoji of DISCORD_REACTIONS) {
     const ok = await starter.react(emoji).then(() => true).catch(e => {
       console.error('Discord reaction add failed:', emoji, e.message);
       return false;
@@ -451,18 +489,9 @@ async function setupDiscordThread(order, webhookMessage) {
       reason: `Commande ${order.id}`
     });
 
-    const control = await thread.send({
-      content:
-        `**Pilotage de la commande ${order.id}**\n` +
-        `Réagis ici ou directement sur le message principal :\n` +
-        `✅ = Commande validée\n` +
-        `🟠 = Manque des choses\n` +
-        `🟡 = Commande prête dans son coffre\n` +
-        `🟢 = Livré\n` +
-        `🔴 = Refusé`
-    });
+    const control = await thread.send({ content: discordControlText(order.id) });
 
-    for (const emoji of ['✅','🟠','🟡','🟢','🔴']) {
+    for (const emoji of DISCORD_REACTIONS) {
       await control.react(emoji).catch(() => {});
     }
 
@@ -489,6 +518,102 @@ async function setupDiscordThread(order, webhookMessage) {
   }
 }
 
+async function removeLegacyPaymentReaction(message) {
+  try {
+    const legacy = message?.reactions?.resolve?.('💵') || message?.reactions?.cache?.find?.(r => r.emoji?.name === '💵');
+    if (legacy?.remove) await legacy.remove();
+  } catch (e) {
+    console.error('Legacy payment reaction cleanup failed:', e.message);
+  }
+}
+
+async function refreshDiscordOrderMessage(order) {
+  if (!DISCORD_WEBHOOK || !order?.discord?.messageId) return false;
+  try {
+    const base = DISCORD_WEBHOOK.split('?')[0].replace(/\/$/, '');
+    const target = `${base}/messages/${order.discord.messageId}`;
+    const r = await remoteFetch(target, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ embeds: [discordOrderEmbed(order)] })
+    });
+    if (!r.ok) {
+      const body = await r.text();
+      throw new Error(`Discord ${r.status}: ${body.slice(0, 180)}`);
+    }
+    return true;
+  } catch (e) {
+    console.error('Discord old order embed cleanup failed:', order?.id, e.message);
+    return false;
+  }
+}
+
+async function cleanupLegacyDiscordControls() {
+  if (!discordClient?.isReady()) return;
+  try {
+    const { data } = await getDataSafe();
+    const current = ensureOpsArrays(normalizeData(data));
+    // Active orders matter most; include a few recent closed orders without hammering Discord.
+    const active = current.orders.filter(o => ['validated','missing','ready'].includes(o.status));
+    const recentClosed = current.orders.filter(o => ['done','refused','cancel'].includes(o.status)).slice(-10);
+    const targets = [...active, ...recentClosed].slice(-60);
+
+    let cleaned = 0;
+    for (const order of targets) {
+      if (!order?.discord) continue;
+
+      try {
+        if (order.discord.channelId && order.discord.messageId) {
+          const channel = await discordClient.channels.fetch(order.discord.channelId);
+          const starter = channel?.messages ? await channel.messages.fetch(order.discord.messageId).catch(() => null) : null;
+          if (starter) {
+            await removeLegacyPaymentReaction(starter);
+            for (const emoji of DISCORD_REACTIONS) await starter.react(emoji).catch(() => {});
+          }
+        }
+      } catch (e) {
+        console.error('Discord main reaction cleanup failed:', order.id, e.message);
+      }
+
+      if (order.discord.threadId) {
+        try {
+          const thread = await discordClient.channels.fetch(order.discord.threadId);
+          const shouldArchive = ['done','refused','cancel'].includes(order.status);
+          if (thread?.archived && !shouldArchive && thread.setArchived) {
+            await thread.setArchived(false, 'Mise à jour du panneau de commande');
+          }
+
+          const controlId = order.discord.controlMessageId;
+          if (thread?.messages && controlId && controlId !== order.discord.messageId) {
+            const control = await thread.messages.fetch(controlId).catch(() => null);
+            if (control) {
+              if (control.author?.id === discordClient.user?.id) {
+                await control.edit({ content: discordControlText(order.id) }).catch(() => {});
+              }
+              await removeLegacyPaymentReaction(control);
+              for (const emoji of DISCORD_REACTIONS) await control.react(emoji).catch(() => {});
+            }
+          }
+
+          if (thread?.setName) await thread.setName(safeThreadName(order, order.status), 'Nettoyage ancien statut paiement').catch(() => {});
+          if (shouldArchive && thread?.setArchived) await thread.setArchived(true, 'Commande terminée').catch(() => {});
+        } catch (e) {
+          console.error('Discord thread cleanup failed:', order.id, e.message);
+        }
+      }
+
+      await refreshDiscordOrderMessage(order);
+      cleaned++;
+    }
+
+    // Persiste aussi la migration des anciens statuts pending/awaiting_payment -> validated.
+    await persistData(current).catch(() => {});
+    console.log('Discord legacy payment cleanup completed:', cleaned, 'order(s)');
+  } catch (e) {
+    console.error('Discord legacy payment cleanup failed:', e.message);
+  }
+}
+
 if (DISCORD_BOT_TOKEN) {
   discordClient = new Client({
     intents: [
@@ -502,6 +627,7 @@ if (DISCORD_BOT_TOKEN) {
   discordClient.once('ready', () => {
     console.log('Discord bot connected as', discordClient.user?.tag);
     discordReadyResolve?.();
+    setTimeout(cleanupLegacyDiscordControls, 2500);
   });
 
   discordClient.on('messageReactionAdd', async (reaction, user) => {
@@ -547,37 +673,12 @@ if (DISCORD_BOT_TOKEN) {
 
 async function sendDiscord(order) {
   if (!DISCORD_WEBHOOK) return { ok: false, error: 'DISCORD_WEBHOOK non configuré' };
-  const prodLines = (order.products || [])
-    .map(p => `> **${p.name}** — ${p.qty} × $${p.price} = **$${p.qty * p.price}**`)
-    .join('\n').slice(0, 1000) || '—';
-  const meta = discordStatusMeta(order.status || 'validated');
-  const embed = {
-    username: 'Maritza · LTD Sandy Shores',
-    embeds: [{
-      title: `${meta.emoji} Nouvelle commande — ${order.id}`,
-      color: meta.color,
-      fields: [
-        { name: '🏢 Entreprise', value: String(order.company || '—').slice(0, 1024), inline: true },
-        { name: '📞 Téléphone', value: String(order.tel || '—').slice(0, 1024), inline: true },
-        { name: '🏦 IBAN', value: '||' + String(order.iban || '—').slice(0, 1000) + '||', inline: true },
-        { name: '📦 Produits', value: prodLines, inline: false },
-        { name: '⚖️ Poids', value: String(order.weight || 0) + ' kg', inline: true },
-        { name: '🚚 Livraison', value: order.freeDelivery ? '✅ Offerte' : '$50', inline: true },
-        { name: '💰 Total', value: '**$' + Number(order.total || 0).toLocaleString('fr-FR') + '**', inline: true },
-        { name: '📍 Adresse', value: String(order.adresse || '—').slice(0, 1024), inline: false },
-        { name: '📅 Date', value: String(order.date || '—'), inline: true },
-        { name: '🕐 Horaire', value: String(order.horaire || '—'), inline: true },
-        { name: '📌 Statut', value: `${meta.emoji} **${meta.label}**`, inline: false }
-      ],
-      footer: { text: 'LTD Sandy Shores · Commandes' },
-      timestamp: new Date().toISOString()
-    }]
-  };
+  const embed = discordOrderEmbed(order);
   const target = DISCORD_WEBHOOK + (DISCORD_WEBHOOK.includes('?') ? '&' : '?') + 'wait=true';
   const r = await remoteFetch(target, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(embed)
+    body: JSON.stringify({ username: 'Maritza · LTD Sandy Shores', embeds: [embed] })
   });
   const body = await r.text();
   if (!r.ok) return { ok: false, error: `Discord ${r.status}: ${body.slice(0, 300)}` };
